@@ -1,6 +1,19 @@
 reset:
   countdown-seconds: 10
 
+players:
+  # Allow players who have not yet participated in the current
+  # attempt to join while it is already in progress.
+  #
+  # true:
+  #   New players may enter the ACTIVE attempt at any time.
+  #
+  # false:
+  #   Only existing participants may rejoin once an attempt
+  #   is underway. New players wait in the safety lobby until
+  #   the next attempt.
+  allow-late-joiners: true
+
 scoreboard:
   enabled: true
   update-interval-ticks: 20
@@ -16,3 +29,6 @@ worlds:
   # 1 = 3x3 chunks
   # 2 = 5x5 chunks
   preload-radius-chunks: 1
+
+debug:
+  enabled: false

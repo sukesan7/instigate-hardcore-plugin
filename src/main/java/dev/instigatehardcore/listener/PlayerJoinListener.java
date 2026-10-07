@@ -6,7 +6,10 @@ import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
 import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
+import dev.instigatehardcore.ui.InstigateTheme;
 import dev.instigatehardcore.world.WorldSetManager;
+
+import net.kyori.adventure.text.Component;
 
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -21,20 +24,27 @@ import java.util.Objects;
 
 public final class PlayerJoinListener implements Listener {
 
-    private static final long JOIN_PLACEMENT_DELAY_TICKS = 1L;
-    private static final long JOIN_VERIFICATION_DELAY_TICKS = 2L;
+    private static final long JOIN_PLACEMENT_DELAY_TICKS =
+        1L;
+
+    private static final long JOIN_VERIFICATION_DELAY_TICKS =
+        2L;
 
     private final JavaPlugin plugin;
+
     private final StatsManager statsManager;
 
     private final HardcoreScoreboardManager scoreboardManager;
 
     private final RunManager runManager;
+
     private final PlayerResetManager playerResetManager;
     private final WorldSetManager worldSetManager;
 
     private final AttemptParticipantManager participantManager;
     private final PlayerTelemetryManager telemetryManager;
+
+    private final boolean allowLateJoiners;
 
     public PlayerJoinListener(
         JavaPlugin plugin,
@@ -44,13 +54,18 @@ public final class PlayerJoinListener implements Listener {
         PlayerResetManager playerResetManager,
         WorldSetManager worldSetManager,
         AttemptParticipantManager participantManager,
-        PlayerTelemetryManager telemetryManager
+        PlayerTelemetryManager telemetryManager,
+        boolean allowLateJoiners
     ) {
         this.plugin =
-            Objects.requireNonNull(plugin);
+            Objects.requireNonNull(
+                plugin
+            );
 
         this.statsManager =
-            Objects.requireNonNull(statsManager);
+            Objects.requireNonNull(
+                statsManager
+            );
 
         /*
          * May be null when scoreboard.enabled=false.
@@ -59,7 +74,9 @@ public final class PlayerJoinListener implements Listener {
             scoreboardManager;
 
         this.runManager =
-            Objects.requireNonNull(runManager);
+            Objects.requireNonNull(
+                runManager
+            );
 
         this.playerResetManager =
             Objects.requireNonNull(
@@ -80,6 +97,9 @@ public final class PlayerJoinListener implements Listener {
             Objects.requireNonNull(
                 telemetryManager
             );
+
+        this.allowLateJoiners =
+            allowLateJoiners;
     }
 
     @EventHandler
@@ -164,6 +184,22 @@ public final class PlayerJoinListener implements Listener {
     private void placeIntoActiveAttempt(
         Player player
     ) {
+        if (
+            !mayEnterCurrentAttempt(
+                player
+            )
+        ) {
+            notifyLateJoinBlocked(
+                player
+            );
+
+            sendToSafetyLobby(
+                player
+            );
+
+            return;
+        }
+
         Location activeSpawn =
             worldSetManager
                 .getActiveWorldSet()
@@ -238,10 +274,115 @@ public final class PlayerJoinListener implements Listener {
         );
     }
 
+    /*
+     * ------------------------------------------------------------
+     * ATTEMPT ADMISSION
+     * ------------------------------------------------------------
+     */
+
+    private boolean mayEnterCurrentAttempt(
+        Player player
+    ) {
+        int attempt =
+            statsManager
+                .getCurrentAttempt();
+
+        /*
+         * Rejoining an attempt you already participated in is
+         * never considered a late join.
+         *
+         * A participant may disconnect and reconnect freely even
+         * when late joining is disabled.
+         */
+        if (
+            participantManager
+                .hasParticipant(
+                    attempt,
+                    player.getUniqueId()
+                )
+        ) {
+            return true;
+        }
+
+        /*
+         * Normal Instigate Cafe behavior:
+         *
+         * new players may enter an already-running attempt.
+         */
+        if (allowLateJoiners) {
+            return true;
+        }
+
+        /*
+         * Bootstrap protection for a completely empty attempt.
+         *
+         * Without this exception, a fresh server with late joining
+         * disabled could start with zero participants and therefore
+         * reject every player forever.
+         *
+         * The first player establishes participation. Once the
+         * attempt has a participant, additional new players must
+         * wait for the next attempt.
+         */
+        return participantManager
+            .getParticipantCount(
+                attempt
+            )
+            == 0;
+    }
+
+    private void notifyLateJoinBlocked(
+        Player player
+    ) {
+        int attempt =
+            statsManager
+                .getCurrentAttempt();
+
+        player.sendMessage(
+            InstigateTheme.chat(
+                Component.text()
+                    .append(
+                        InstigateTheme.attempt(
+                            attempt
+                        )
+                    )
+                    .append(
+                        InstigateTheme.secondary(
+                            " is already in progress. "
+                        )
+                    )
+                    .append(
+                        InstigateTheme.text(
+                            "You'll join the next attempt."
+                        )
+                    )
+                    .build()
+            )
+        );
+
+        plugin.getLogger().info(
+            "[Instigate Cafe] "
+                + player.getName()
+                + " was held out of attempt #"
+                + attempt
+                + " because late joining is disabled."
+        );
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * PARTICIPATION
+     * ------------------------------------------------------------
+     */
+
     private void recordParticipation(
         Player player
     ) {
-        if (!isActiveParticipantLocation(player)) {
+        if (
+            !isActiveParticipantLocation(
+                player
+            )
+        ) {
             return;
         }
 
@@ -257,10 +398,11 @@ public final class PlayerJoinListener implements Listener {
 
             if (firstParticipation) {
                 plugin.getLogger().info(
-                    "[Instigate Cafe Hardcore] "
+                    "[Instigate Cafe] "
                         + player.getName()
                         + " joined attempt #"
-                        + statsManager.getCurrentAttempt()
+                        + statsManager
+                            .getCurrentAttempt()
                         + " as a participant."
                 );
             }
@@ -286,7 +428,11 @@ public final class PlayerJoinListener implements Listener {
     private void beginTelemetrySession(
         Player player
     ) {
-        if (!isActiveParticipantLocation(player)) {
+        if (
+            !isActiveParticipantLocation(
+                player
+            )
+        ) {
             return;
         }
 
@@ -311,7 +457,11 @@ public final class PlayerJoinListener implements Listener {
     private void normalizeActivePlayer(
         Player player
     ) {
-        if (!isActiveParticipantLocation(player)) {
+        if (
+            !isActiveParticipantLocation(
+                player
+            )
+        ) {
             return;
         }
 
@@ -324,7 +474,7 @@ public final class PlayerJoinListener implements Listener {
                 != GameMode.SURVIVAL
         ) {
             plugin.getLogger().info(
-                "[Instigate Cafe Hardcore] "
+                "[Instigate Cafe] "
                     + "Restoring "
                     + player.getName()
                     + " to SURVIVAL in the active attempt."
@@ -339,6 +489,8 @@ public final class PlayerJoinListener implements Listener {
     /**
      * Paper can apply additional player state shortly after the
      * join event. Verify once more after login restoration.
+     *
+     * Phase 8B will strengthen this verification path further.
      */
     private void scheduleActiveStateVerification(
         Player player
@@ -348,7 +500,11 @@ public final class PlayerJoinListener implements Listener {
             .runTaskLater(
                 plugin,
                 () -> {
-                    if (!isActiveParticipantLocation(player)) {
+                    if (
+                        !isActiveParticipantLocation(
+                            player
+                        )
+                    ) {
                         return;
                     }
 
@@ -370,6 +526,12 @@ public final class PlayerJoinListener implements Listener {
                 JOIN_VERIFICATION_DELAY_TICKS
             );
     }
+
+    /*
+     * ------------------------------------------------------------
+     * SAFETY LOBBY
+     * ------------------------------------------------------------
+     */
 
     private void sendToSafetyLobby(
         Player player
