@@ -280,8 +280,6 @@ Administrative resets do **not** count as player deaths.
 
 ![Instigate Hardcore New Attempt](docs/assets/gallery/new-attempt.png)
 
-> Screenshots will be added as the public release is prepared.
-
 ---
 
 # Installation
