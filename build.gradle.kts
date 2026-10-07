@@ -16,7 +16,10 @@ repositories {
 dependencies {
     compileOnly("io.papermc.paper:paper-api:26.3.build.157-beta")
 
-    testImplementation("org.junit.jupiter:junit-jupiter:6.1.2")
+    testImplementation(platform("org.junit:junit-bom:6.1.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 java {
