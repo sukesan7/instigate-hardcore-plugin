@@ -1,0 +1,33 @@
+# Gradle
+.gradle/
+build/
+
+# IntelliJ
+.idea/
+*.iml
+out/
+
+# VS Code
+.vscode/
+
+# Java
+*.class
+hs_err_pid*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Paper server
+server/*
+
+# Keep directory in repository
+!server/.gitkeep
+
+# Runtime/plugin data
+*.log
+
+# Environment / secrets
+.env
+.env.*
+!.env.example

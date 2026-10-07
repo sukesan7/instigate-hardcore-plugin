@@ -1,0 +1,13 @@
+# InstigateHardcore
+#
+# Gameplay configuration will be introduced incrementally
+# as each system is implemented and tested.
+
+reset:
+  countdown-seconds: 10
+
+scoreboard:
+  enabled: true
+
+debug:
+  enabled: false

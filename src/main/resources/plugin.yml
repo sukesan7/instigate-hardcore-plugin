@@ -1,0 +1,10 @@
+name: InstigateHardcore
+version: 0.1.0-SNAPSHOT
+main: dev.instigatehardcore.InstigateHardcore
+api-version: '26.3'
+
+description: Shared-death hardcore survival for multiplayer Paper servers.
+authors:
+  - Instigate
+
+load: POSTWORLD
