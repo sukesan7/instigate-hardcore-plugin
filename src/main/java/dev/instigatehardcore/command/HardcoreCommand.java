@@ -23,13 +23,19 @@ import dev.instigatehardcore.world.WorldSetManager;
 import dev.instigatehardcore.world.WorldStateStore;
 
 import net.kyori.adventure.text.Component;
+
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
+
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 
 import org.bukkit.Bukkit;
+
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+
 import org.bukkit.entity.Player;
 
 import java.io.IOException;
@@ -393,6 +399,28 @@ public final class HardcoreCommand
             Component.empty()
         );
 
+        Component confirmationCommand =
+            Component.text(
+                "/hc reset confirm",
+                NamedTextColor.GOLD
+            )
+                .decorate(
+                    TextDecoration.BOLD
+                )
+                .hoverEvent(
+                    HoverEvent.showText(
+                        Component.text(
+                            "Click to place the confirmation command in chat.",
+                            NamedTextColor.GRAY
+                        )
+                    )
+                )
+                .clickEvent(
+                    ClickEvent.suggestCommand(
+                        "/hc reset confirm"
+                    )
+                );
+
         sender.sendMessage(
             Component.text()
                 .append(
@@ -402,12 +430,7 @@ public final class HardcoreCommand
                     )
                 )
                 .append(
-                    Component.text(
-                        "/hc reset confirm",
-                        NamedTextColor.GOLD
-                    ).decorate(
-                        TextDecoration.BOLD
-                    )
+                    confirmationCommand
                 )
                 .append(
                     Component.text(
@@ -525,7 +548,8 @@ public final class HardcoreCommand
                 instanceof Player player
         ) {
             return "player:"
-                + player.getUniqueId();
+                + player
+                    .getUniqueId();
         }
 
         return "sender:"
@@ -692,12 +716,32 @@ public final class HardcoreCommand
             brand()
         );
 
-        sender.sendMessage(
+        Component statsHeading =
             Component.text(
-                name
-                    + " — PLAYER STATS",
+                name,
                 NamedTextColor.RED
             )
+                .decorate(
+                    TextDecoration.BOLD
+                )
+                .hoverEvent(
+                    HoverEvent.showText(
+                        Component.text(
+                            "Hardcore statistics for "
+                                + name,
+                            NamedTextColor.GRAY
+                        )
+                    )
+                )
+                .append(
+                    Component.text(
+                        " — PLAYER STATS",
+                        NamedTextColor.RED
+                    )
+                );
+
+        sender.sendMessage(
+            statsHeading
         );
 
         sender.sendMessage(
@@ -956,7 +1000,7 @@ public final class HardcoreCommand
                     )
                 )
                 .append(
-                    Component.text(
+                    clickablePlayerName(
                         player.name(),
                         NamedTextColor.WHITE
                     )
@@ -1226,7 +1270,8 @@ public final class HardcoreCommand
                 sender,
                 "ACTIVE WORLD",
                 "Attempt #"
-                    + active.attemptNumber(),
+                    + active
+                        .attemptNumber(),
                 NamedTextColor.GREEN
             );
         }
@@ -1236,7 +1281,8 @@ public final class HardcoreCommand
                 sender,
                 "STANDBY WORLD",
                 "Attempt #"
-                    + standby.attemptNumber()
+                    + standby
+                        .attemptNumber()
                     + " • Ready",
                 NamedTextColor.AQUA
             );
@@ -1341,7 +1387,7 @@ public final class HardcoreCommand
         sender.sendMessage(
             Component.text()
                 .append(
-                    Component.text(
+                    clickablePlayerName(
                         participant.name(),
                         nameColor
                     )
@@ -1608,7 +1654,8 @@ public final class HardcoreCommand
         }
 
         /*
-         * Campaign attempt must match ACTIVE.
+         * Stats attempt should always agree with the loaded
+         * ACTIVE WorldSet.
          */
         if (active == null) {
             warnings.add(
@@ -1628,8 +1675,7 @@ public final class HardcoreCommand
         }
 
         /*
-         * Standby should always be exactly one attempt ahead
-         * whenever it exists.
+         * Standby should always be one attempt ahead.
          */
         if (
             active != null
@@ -1660,7 +1706,7 @@ public final class HardcoreCommand
         }
 
         /*
-         * Persistent state must agree with loaded state.
+         * Persistent state should agree with loaded state.
          */
         if (
             persistentState != null
@@ -1701,9 +1747,8 @@ public final class HardcoreCommand
         }
 
         /*
-         * STABLE is expected during normal ACTIVE gameplay.
-         *
-         * ROTATING is legitimate only during the reset pipeline.
+         * ACTIVE gameplay should normally have persistent world
+         * state in STABLE.
          */
         if (
             persistentState != null
@@ -1721,7 +1766,8 @@ public final class HardcoreCommand
         }
 
         int onlinePlayers =
-            Bukkit.getOnlinePlayers()
+            Bukkit
+                .getOnlinePlayers()
                 .size();
 
         int activePlayers =
@@ -2087,6 +2133,38 @@ public final class HardcoreCommand
 
     /*
      * ------------------------------------------------------------
+     * INTERACTIVE COMPONENTS
+     * ------------------------------------------------------------
+     */
+
+    private Component clickablePlayerName(
+        String name,
+        NamedTextColor color
+    ) {
+        return Component.text(
+            name,
+            color
+        )
+            .hoverEvent(
+                HoverEvent.showText(
+                    Component.text(
+                        "View "
+                            + name
+                            + "'s hardcore stats",
+                        NamedTextColor.GRAY
+                    )
+                )
+            )
+            .clickEvent(
+                ClickEvent.runCommand(
+                    "/hc stats "
+                        + name
+                )
+            );
+    }
+
+    /*
+     * ------------------------------------------------------------
      * COMMON FORMATTERS
      * ------------------------------------------------------------
      */
@@ -2232,13 +2310,34 @@ public final class HardcoreCommand
         String syntax,
         String description
     ) {
+        String suggestedCommand =
+            commandSuggestionFromSyntax(
+                syntax
+            );
+
+        Component commandComponent =
+            Component.text(
+                syntax,
+                NamedTextColor.GOLD
+            )
+                .hoverEvent(
+                    HoverEvent.showText(
+                        Component.text(
+                            "Click to use this command.",
+                            NamedTextColor.GRAY
+                        )
+                    )
+                )
+                .clickEvent(
+                    ClickEvent.suggestCommand(
+                        suggestedCommand
+                    )
+                );
+
         sender.sendMessage(
             Component.text()
                 .append(
-                    Component.text(
-                        syntax,
-                        NamedTextColor.GOLD
-                    )
+                    commandComponent
                 )
                 .append(
                     Component.text(
@@ -2254,6 +2353,40 @@ public final class HardcoreCommand
                 )
                 .build()
         );
+    }
+
+    private String commandSuggestionFromSyntax(
+        String syntax
+    ) {
+        int placeholderStart =
+            syntax.indexOf(
+                '<'
+            );
+
+        if (placeholderStart >= 0) {
+            return syntax
+                .substring(
+                    0,
+                    placeholderStart
+                )
+                .stripTrailing();
+        }
+
+        int optionalStart =
+            syntax.indexOf(
+                '['
+            );
+
+        if (optionalStart >= 0) {
+            return syntax
+                .substring(
+                    0,
+                    optionalStart
+                )
+                .stripTrailing();
+        }
+
+        return syntax;
     }
 
     private void sendUnknownCommand(
