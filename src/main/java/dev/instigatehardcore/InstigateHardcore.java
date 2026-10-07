@@ -4,6 +4,7 @@ import dev.instigatehardcore.core.RunManager;
 import dev.instigatehardcore.countdown.CountdownManager;
 import dev.instigatehardcore.listener.DeathListener;
 import dev.instigatehardcore.listener.PlayerJoinListener;
+import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
 
@@ -22,6 +23,7 @@ public final class InstigateHardcore extends JavaPlugin {
     private StatsManager statsManager;
     private CountdownManager countdownManager;
     private HardcoreScoreboardManager scoreboardManager;
+    private PlayerResetManager playerResetManager;
 
     @Override
     public void onEnable() {
@@ -36,7 +38,7 @@ public final class InstigateHardcore extends JavaPlugin {
         }
 
         /*
-         * Create and start the current hardcore run.
+         * Create and activate the current hardcore run.
          */
         runManager = new RunManager();
 
@@ -52,21 +54,30 @@ public final class InstigateHardcore extends JavaPlugin {
             return;
         }
 
+        /*
+         * Handles per-player cleanup and spectator transitions
+         * between hardcore attempts.
+         */
+        playerResetManager =
+            new PlayerResetManager(
+                this
+            );
+
         initializeCountdown();
         initializeScoreboard();
         registerListeners();
 
         /*
-         * Start the scoreboard updater after all core systems
-         * and listeners have been initialized.
+         * Start the scoreboard after all core systems and
+         * listeners have been initialized.
          */
         if (scoreboardManager != null) {
             scoreboardManager.start();
 
             /*
              * Normally nobody should already be online when the
-             * plugin initially loads, but this also supports
-             * development reload scenarios.
+             * plugin first loads, but this also supports development
+             * reload scenarios.
              */
             registerExistingPlayers();
         }
@@ -138,13 +149,15 @@ public final class InstigateHardcore extends JavaPlugin {
      * @return true if statistics loaded successfully
      */
     private boolean initializeStats() {
-        Path statsPath = getDataFolder()
-            .toPath()
-            .resolve("stats.properties");
+        Path statsPath =
+            getDataFolder()
+                .toPath()
+                .resolve("stats.properties");
 
-        statsManager = new StatsManager(
-            statsPath
-        );
+        statsManager =
+            new StatsManager(
+                statsPath
+            );
 
         try {
             statsManager.load();
@@ -169,10 +182,11 @@ public final class InstigateHardcore extends JavaPlugin {
      * Initializes the run-ending countdown using config.yml.
      */
     private void initializeCountdown() {
-        int configuredSeconds = getConfig().getInt(
-            "reset.countdown-seconds",
-            DEFAULT_COUNTDOWN_SECONDS
-        );
+        int configuredSeconds =
+            getConfig().getInt(
+                "reset.countdown-seconds",
+                DEFAULT_COUNTDOWN_SECONDS
+            );
 
         if (configuredSeconds < 1) {
             getLogger().warning(
@@ -252,7 +266,8 @@ public final class InstigateHardcore extends JavaPlugin {
                     this,
                     runManager,
                     statsManager,
-                    countdownManager
+                    countdownManager,
+                    playerResetManager
                 ),
                 this
             );
@@ -321,5 +336,9 @@ public final class InstigateHardcore extends JavaPlugin {
 
     public HardcoreScoreboardManager getScoreboardManager() {
         return scoreboardManager;
+    }
+
+    public PlayerResetManager getPlayerResetManager() {
+        return playerResetManager;
     }
 }
