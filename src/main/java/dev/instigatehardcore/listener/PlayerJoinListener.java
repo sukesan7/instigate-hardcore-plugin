@@ -19,6 +19,9 @@ import java.util.Objects;
 
 public final class PlayerJoinListener implements Listener {
 
+    private static final long JOIN_PLACEMENT_DELAY_TICKS = 1L;
+    private static final long JOIN_VERIFICATION_DELAY_TICKS = 2L;
+
     private final JavaPlugin plugin;
     private final StatsManager statsManager;
     private final HardcoreScoreboardManager scoreboardManager;
@@ -80,16 +83,17 @@ public final class PlayerJoinListener implements Listener {
         }
 
         /*
-         * Give Paper one tick to finish its normal login/world
-         * restoration process before enforcing our campaign world.
+         * Wait until Paper has finished its normal login/world
+         * restoration before enforcing campaign state.
          */
         plugin.getServer()
             .getScheduler()
-            .runTask(
+            .runTaskLater(
                 plugin,
                 () -> placePlayer(
                     player
-                )
+                ),
+                JOIN_PLACEMENT_DELAY_TICKS
             );
     }
 
@@ -121,39 +125,45 @@ public final class PlayerJoinListener implements Listener {
             return;
         }
 
-        /*
-         * During a healthy ACTIVE attempt, players belong in the
-         * current active WorldSet.
-         */
         if (runManager.isActive()) {
+            placeIntoActiveAttempt(
+                player
+            );
 
-            /*
-             * Returning players already inside the active attempt
-             * retain their location and current survival progress.
-             */
-            if (
-                worldSetManager.isActiveWorld(
-                    player.getWorld()
-                )
-            ) {
-                return;
-            }
+            return;
+        }
 
-            Location spawn =
-                worldSetManager
-                    .getActiveWorldSet()
-                    .getSpawnLocation();
+        /*
+         * A player joining while ENDING or RESETTING may not
+         * participate in gameplay.
+         */
+        sendToSafetyLobby(
+            player
+        );
+    }
 
+    private void placeIntoActiveAttempt(
+        Player player
+    ) {
+        Location activeSpawn =
+            worldSetManager
+                .getActiveWorldSet()
+                .getSpawnLocation();
+
+        /*
+         * If Paper restored this player into a stale world from
+         * an older attempt, perform the complete attempt reset.
+         */
+        if (
+            !worldSetManager.isActiveWorld(
+                player.getWorld()
+            )
+        ) {
             try {
-                /*
-                 * A player arriving from an old attempt, lobby,
-                 * or stale logout world enters the current attempt
-                 * as a clean player.
-                 */
                 playerResetManager
                     .prepareForNewAttempt(
                         player,
-                        spawn
+                        activeSpawn
                     );
             } catch (
                 RuntimeException exception
@@ -169,18 +179,111 @@ public final class PlayerJoinListener implements Listener {
                 sendToSafetyLobby(
                     player
                 );
+
+                return;
             }
+
+            scheduleActiveStateVerification(
+                player
+            );
 
             return;
         }
 
         /*
-         * Players joining while the current attempt is ENDING or
-         * RESETTING must not enter normal gameplay.
+         * The player is already in the current ACTIVE WorldSet.
+         *
+         * Preserve their inventory and position on an ordinary
+         * reconnect, but normalize gameplay state.
+         *
+         * This is especially important after crash recovery:
+         * Paper may restore a player in the newly recovered
+         * ACTIVE world while their saved gamemode is SPECTATOR.
          */
-        sendToSafetyLobby(
+        normalizeActivePlayer(
             player
         );
+
+        scheduleActiveStateVerification(
+            player
+        );
+    }
+
+    private void normalizeActivePlayer(
+        Player player
+    ) {
+        if (!player.isOnline()) {
+            return;
+        }
+
+        if (!runManager.isActive()) {
+            return;
+        }
+
+        if (
+            !worldSetManager.isActiveWorld(
+                player.getWorld()
+            )
+        ) {
+            return;
+        }
+
+        player.setSpectatorTarget(
+            null
+        );
+
+        if (
+            player.getGameMode()
+                != GameMode.SURVIVAL
+        ) {
+            plugin.getLogger().info(
+                "[Instigate Cafe Hardcore] "
+                    + "Restoring "
+                    + player.getName()
+                    + " to SURVIVAL in the active attempt."
+            );
+
+            player.setGameMode(
+                GameMode.SURVIVAL
+            );
+        }
+    }
+
+    /**
+     * Paper/vanilla login restoration can make changes shortly
+     * after PlayerJoinEvent.
+     *
+     * Verify the state again a couple of ticks later so recovery
+     * cannot leave somebody stuck in spectator mode.
+     */
+    private void scheduleActiveStateVerification(
+        Player player
+    ) {
+        plugin.getServer()
+            .getScheduler()
+            .runTaskLater(
+                plugin,
+                () -> {
+                    if (!player.isOnline()) {
+                        return;
+                    }
+
+                    if (!runManager.isActive()) {
+                        return;
+                    }
+
+                    if (
+                        worldSetManager.isActiveWorld(
+                            player.getWorld()
+                        )
+                    ) {
+                        normalizeActivePlayer(
+                            player
+                        );
+                    }
+                },
+                JOIN_VERIFICATION_DELAY_TICKS
+            );
     }
 
     private void sendToSafetyLobby(
@@ -192,8 +295,8 @@ public final class PlayerJoinListener implements Listener {
             );
 
         /*
-         * Wait another tick because prepareForCountdown() may
-         * need to respawn a dead player first.
+         * prepareForCountdown() may first need to respawn a dead
+         * player, so defer the actual lobby teleport.
          */
         plugin.getServer()
             .getScheduler()

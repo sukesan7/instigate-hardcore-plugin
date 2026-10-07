@@ -9,6 +9,7 @@ import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
 import dev.instigatehardcore.world.WorldCleanupManager;
+import dev.instigatehardcore.world.WorldRecoveryManager;
 import dev.instigatehardcore.world.WorldRotationManager;
 import dev.instigatehardcore.world.WorldSetManager;
 import dev.instigatehardcore.world.WorldStateStore;
@@ -34,10 +35,11 @@ public final class InstigateHardcore extends JavaPlugin {
     private StatsManager statsManager;
 
     private CountdownManager countdownManager;
-
     private HardcoreScoreboardManager scoreboardManager;
-
     private PlayerResetManager playerResetManager;
+
+    private WorldStateStore worldStateStore;
+    private WorldRecoveryManager worldRecoveryManager;
 
     private WorldSetManager worldSetManager;
     private WorldCleanupManager worldCleanupManager;
@@ -48,27 +50,24 @@ public final class InstigateHardcore extends JavaPlugin {
         saveDefaultConfig();
 
         /*
-         * Stats establish which campaign attempt should currently
-         * exist.
+         * Persistent player/campaign statistics are required
+         * before world-state recovery can run.
          */
         if (!initializeStats()) {
             return;
         }
 
         /*
-         * Load/create:
-         *
-         * - permanent lobby
-         * - ACTIVE attempt
-         * - STANDBY attempt
+         * World-state recovery happens before loading any custom
+         * campaign worlds.
          */
         if (!initializeWorldSets()) {
             return;
         }
 
         /*
-         * Gameplay only becomes ACTIVE after the world pipeline
-         * exists successfully.
+         * Once recovery and world loading succeed, the campaign
+         * can safely enter ACTIVE runtime state.
          */
         runManager =
             new RunManager();
@@ -92,12 +91,6 @@ public final class InstigateHardcore extends JavaPlugin {
 
         initializeCountdown();
         initializeScoreboard();
-
-        /*
-         * Cleanup must exist before WorldRotationManager because
-         * successful rotations immediately schedule retired-world
-         * cleanup.
-         */
         initializeWorldCleanup();
         initializeWorldRotation();
 
@@ -176,6 +169,10 @@ public final class InstigateHardcore extends JavaPlugin {
         }
     }
 
+    /**
+     * Recovers the persistent world pipeline first, then loads
+     * ACTIVE and STANDBY worlds according to the recovered state.
+     */
     private boolean initializeWorldSets() {
         String lobbyWorldName =
             getConfig().getString(
@@ -215,7 +212,7 @@ public final class InstigateHardcore extends JavaPlugin {
                 DEFAULT_PRELOAD_RADIUS_CHUNKS;
         }
 
-        WorldStateStore stateStore =
+        worldStateStore =
             new WorldStateStore(
                 getDataFolder()
                     .toPath()
@@ -224,10 +221,77 @@ public final class InstigateHardcore extends JavaPlugin {
                     )
             );
 
+        worldRecoveryManager =
+            new WorldRecoveryManager(
+                statsManager,
+                worldStateStore
+            );
+
+        /*
+         * RECOVERY FIRST.
+         *
+         * At this point no attempt WorldSets have been loaded by
+         * InstigateHardcore yet.
+         */
+        try {
+            WorldRecoveryManager.RecoveryResult recovery =
+                worldRecoveryManager
+                    .recover();
+
+            if (
+                recovery.completedIncompleteRotation()
+            ) {
+                getLogger().warning(
+                    "[Instigate Cafe Hardcore] "
+                        + "Recovered an interrupted world rotation."
+                );
+            }
+
+            if (
+                recovery.advancedStats()
+            ) {
+                getLogger().warning(
+                    "[Instigate Cafe Hardcore] "
+                        + "Reconciled campaign statistics to attempt #"
+                        + recovery
+                            .state()
+                            .activeAttempt()
+                        + "."
+                );
+            }
+
+            getLogger().info(
+                "[Instigate Cafe Hardcore] "
+                    + "Persistent world state is STABLE at attempt #"
+                    + recovery
+                        .state()
+                        .activeAttempt()
+                    + "."
+            );
+        } catch (
+            IOException exception
+        ) {
+            getLogger().severe(
+                "Unable to recover persistent hardcore world state."
+            );
+
+            exception.printStackTrace();
+
+            getServer()
+                .getPluginManager()
+                .disablePlugin(this);
+
+            return false;
+        }
+
+        /*
+         * Recovery may have advanced StatsManager, so use its
+         * current value here rather than a value captured earlier.
+         */
         worldSetManager =
             new WorldSetManager(
                 this,
-                stateStore,
+                worldStateStore,
                 lobbyWorldName,
                 preloadRadius
             );
@@ -367,8 +431,8 @@ public final class InstigateHardcore extends JavaPlugin {
             );
 
         /*
-         * Keep all portal travel inside the currently ACTIVE
-         * hardcore attempt.
+         * Keep Nether / End portal travel isolated to the
+         * currently ACTIVE attempt.
          */
         getServer()
             .getPluginManager()
@@ -382,10 +446,8 @@ public final class InstigateHardcore extends JavaPlugin {
             );
 
         /*
-         * Always register this listener.
-         *
-         * Besides scoreboard assignment, it is responsible for
-         * placing players into the current ACTIVE attempt.
+         * PlayerJoinListener also restores players into the
+         * recovered ACTIVE attempt after a restart.
          */
         getServer()
             .getPluginManager()
@@ -402,10 +464,6 @@ public final class InstigateHardcore extends JavaPlugin {
             );
     }
 
-    /**
-     * Supports development reloads and other situations where
-     * players are already online when the plugin initializes.
-     */
     private void registerExistingPlayers() {
         for (
             Player player :
@@ -500,6 +558,10 @@ public final class InstigateHardcore extends JavaPlugin {
         getLogger().info(
             "Active-attempt portal routing enabled."
         );
+
+        getLogger().info(
+            "Crash/restart recovery enabled."
+        );
     }
 
     public RunManager getRunManager() {
@@ -520,6 +582,14 @@ public final class InstigateHardcore extends JavaPlugin {
 
     public PlayerResetManager getPlayerResetManager() {
         return playerResetManager;
+    }
+
+    public WorldStateStore getWorldStateStore() {
+        return worldStateStore;
+    }
+
+    public WorldRecoveryManager getWorldRecoveryManager() {
+        return worldRecoveryManager;
     }
 
     public WorldSetManager getWorldSetManager() {

@@ -51,8 +51,11 @@ public final class WorldSetManager {
     }
 
     /**
-     * Initializes the permanent lobby, ACTIVE attempt,
+     * Loads or creates the permanent lobby, ACTIVE attempt
      * and STANDBY attempt.
+     *
+     * Persistent recovery must already have completed before
+     * this method is called.
      */
     public synchronized void initialize(
         int currentAttempt
@@ -74,6 +77,22 @@ public final class WorldSetManager {
             stateStore.loadOrCreate(
                 currentAttempt
             );
+
+        /*
+         * WorldRecoveryManager must resolve interrupted
+         * transactions before actual campaign worlds are loaded.
+         */
+        if (
+            state.phase()
+                != WorldRotationPhase.STABLE
+        ) {
+            throw new IOException(
+                "World pipeline is still marked "
+                    + state.phase()
+                    + ". Startup recovery must run before "
+                    + "WorldSetManager initialization."
+            );
+        }
 
         validateCampaignState(
             state,
@@ -143,24 +162,101 @@ public final class WorldSetManager {
                     + "."
             );
         }
+
+        if (
+            state.phase()
+                != WorldRotationPhase.STABLE
+        ) {
+            throw new IOException(
+                "Campaign state is not STABLE."
+            );
+        }
     }
 
     /**
-     * Promotes the current STANDBY WorldSet to ACTIVE.
+     * Durably begins a world-rotation transaction.
      *
-     * The previous ACTIVE WorldSet becomes RETIRED.
+     * This must happen before any player is moved into the
+     * standby attempt.
      *
-     * @return the previously active WorldSet
+     * Once ROTATING is persisted, recovery considers the old
+     * attempt finished even if Paper crashes before promotion.
+     */
+    public synchronized void beginRotation()
+        throws IOException {
+
+        if (activeWorldSet == null) {
+            throw new IOException(
+                "Cannot begin rotation without an active WorldSet."
+            );
+        }
+
+        if (standbyWorldSet == null) {
+            throw new IOException(
+                "Cannot begin rotation without a standby WorldSet."
+            );
+        }
+
+        if (retiredWorldSet != null) {
+            throw new IOException(
+                "Cannot begin rotation while retired attempt #"
+                    + retiredWorldSet.attemptNumber()
+                    + " is still awaiting cleanup."
+            );
+        }
+
+        WorldRotationState state =
+            stateStore.load();
+
+        if (
+            state.phase()
+                != WorldRotationPhase.STABLE
+        ) {
+            throw new IOException(
+                "Cannot begin rotation while persistent state is "
+                    + state.phase()
+                    + "."
+            );
+        }
+
+        validateLoadedWorldsAgainstState(
+            state
+        );
+
+        WorldRotationState rotating =
+            new WorldRotationState(
+                state.activeAttempt(),
+                state.activeSeed(),
+                state.standbyAttempt(),
+                state.standbySeed(),
+                WorldRotationPhase.ROTATING
+            );
+
+        stateStore.save(
+            rotating
+        );
+
+        plugin.getLogger().info(
+            "[Instigate Cafe Hardcore] "
+                + "World rotation transaction started: #"
+                + state.activeAttempt()
+                + " -> #"
+                + state.standbyAttempt()
+                + "."
+        );
+    }
+
+    /**
+     * Promotes STANDBY -> ACTIVE.
+     *
+     * ACTIVE -> RETIRED.
+     *
+     * This operation also commits a new STABLE persistent world
+     * pipeline containing metadata for the next standby attempt.
      */
     public synchronized WorldSet promoteStandby()
         throws IOException {
 
-        /*
-         * We only support one retired attempt at a time.
-         *
-         * If cleanup has not completed yet, another rotation
-         * must not overwrite the retired reference.
-         */
         if (retiredWorldSet != null) {
             throw new IOException(
                 "Cannot rotate while retired attempt #"
@@ -174,6 +270,29 @@ public final class WorldSetManager {
                 "Cannot rotate worlds because no standby WorldSet exists."
             );
         }
+
+        if (activeWorldSet == null) {
+            throw new IOException(
+                "Cannot rotate worlds because no active WorldSet exists."
+            );
+        }
+
+        WorldRotationState persistedState =
+            stateStore.load();
+
+        if (
+            persistedState.phase()
+                != WorldRotationPhase.ROTATING
+        ) {
+            throw new IOException(
+                "Cannot promote standby because the world pipeline "
+                    + "is not marked ROTATING."
+            );
+        }
+
+        validateLoadedWorldsAgainstState(
+            persistedState
+        );
 
         WorldSet previousActive =
             activeWorldSet;
@@ -190,18 +309,22 @@ public final class WorldSetManager {
                 promoted.seed()
             );
 
+        /*
+         * Promotion becomes durable here.
+         *
+         * If Paper crashes after this save but before stats are
+         * advanced, startup recovery sees ACTIVE = stats + 1 and
+         * reconciles StatsManager automatically.
+         */
         WorldRotationState nextState =
             new WorldRotationState(
                 promoted.attemptNumber(),
                 promoted.seed(),
                 nextStandbyAttempt,
-                nextStandbySeed
+                nextStandbySeed,
+                WorldRotationPhase.STABLE
             );
 
-        /*
-         * Persist the new pipeline before changing
-         * the in-memory references.
-         */
         stateStore.save(
             nextState
         );
@@ -233,8 +356,8 @@ public final class WorldSetManager {
     }
 
     /**
-     * Creates the replacement standby WorldSet described by
-     * world-state.properties.
+     * Creates the replacement STANDBY WorldSet described by
+     * the current STABLE world-state.properties.
      */
     public synchronized WorldSet createReplacementStandby()
         throws IOException {
@@ -251,6 +374,18 @@ public final class WorldSetManager {
 
         WorldRotationState state =
             stateStore.load();
+
+        if (
+            state.phase()
+                != WorldRotationPhase.STABLE
+        ) {
+            throw new IOException(
+                "Cannot generate replacement standby while world "
+                    + "state is "
+                    + state.phase()
+                    + "."
+            );
+        }
 
         if (
             state.activeAttempt()
@@ -296,8 +431,8 @@ public final class WorldSetManager {
     }
 
     /**
-     * Clears the RETIRED reference only after all three worlds
-     * belonging to it have successfully unloaded.
+     * Called by WorldCleanupManager after all three retired
+     * dimensions have successfully unloaded.
      */
     public synchronized void clearRetiredWorldSet(
         WorldSet expected
@@ -331,6 +466,45 @@ public final class WorldSetManager {
 
         retiredWorldSet =
             null;
+    }
+
+    private void validateLoadedWorldsAgainstState(
+        WorldRotationState state
+    ) throws IOException {
+
+        if (activeWorldSet == null) {
+            throw new IOException(
+                "No ACTIVE WorldSet is loaded."
+            );
+        }
+
+        if (standbyWorldSet == null) {
+            throw new IOException(
+                "No STANDBY WorldSet is loaded."
+            );
+        }
+
+        if (
+            activeWorldSet.attemptNumber()
+                != state.activeAttempt()
+            || activeWorldSet.seed()
+                != state.activeSeed()
+        ) {
+            throw new IOException(
+                "Loaded ACTIVE WorldSet does not match persistent state."
+            );
+        }
+
+        if (
+            standbyWorldSet.attemptNumber()
+                != state.standbyAttempt()
+            || standbyWorldSet.seed()
+                != state.standbySeed()
+        ) {
+            throw new IOException(
+                "Loaded STANDBY WorldSet does not match persistent state."
+            );
+        }
     }
 
     private WorldSet createOrLoadWorldSet(

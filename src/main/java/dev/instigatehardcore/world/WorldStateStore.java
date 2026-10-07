@@ -13,7 +13,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 public final class WorldStateStore {
 
-    private static final int FORMAT_VERSION = 1;
+    private static final int FORMAT_VERSION = 2;
 
     private final Path stateFile;
 
@@ -24,14 +24,6 @@ public final class WorldStateStore {
             Objects.requireNonNull(stateFile);
     }
 
-    /**
-     * Loads the existing world rotation state.
-     *
-     * If no state exists yet, creates:
-     *
-     * current attempt -> ACTIVE
-     * current + 1     -> STANDBY
-     */
     public synchronized WorldRotationState loadOrCreate(
         int currentAttempt
     ) throws IOException {
@@ -43,15 +35,26 @@ public final class WorldStateStore {
         }
 
         if (!Files.exists(stateFile)) {
+            long activeSeed =
+                randomSeed();
+
+            long standbySeed =
+                randomSeedDifferentFrom(
+                    activeSeed
+                );
+
             WorldRotationState created =
                 new WorldRotationState(
                     currentAttempt,
-                    randomSeed(),
+                    activeSeed,
                     currentAttempt + 1,
-                    randomSeed()
+                    standbySeed,
+                    WorldRotationPhase.STABLE
                 );
 
-            save(created);
+            save(
+                created
+            );
 
             return created;
         }
@@ -74,9 +77,13 @@ public final class WorldStateStore {
 
         try (
             InputStream input =
-                Files.newInputStream(stateFile)
+                Files.newInputStream(
+                    stateFile
+                )
         ) {
-            properties.load(input);
+            properties.load(
+                input
+            );
         }
 
         int version =
@@ -84,6 +91,39 @@ public final class WorldStateStore {
                 properties,
                 "version"
             );
+
+        /*
+         * Version 1 existed before transactional rotation
+         * recovery. Every v1 state represented a stable pipeline.
+         */
+        if (version == 1) {
+            WorldRotationState migrated =
+                new WorldRotationState(
+                    parseInt(
+                        properties,
+                        "active.attempt"
+                    ),
+                    parseLong(
+                        properties,
+                        "active.seed"
+                    ),
+                    parseInt(
+                        properties,
+                        "standby.attempt"
+                    ),
+                    parseLong(
+                        properties,
+                        "standby.seed"
+                    ),
+                    WorldRotationPhase.STABLE
+                );
+
+            save(
+                migrated
+            );
+
+            return migrated;
+        }
 
         if (version != FORMAT_VERSION) {
             throw new IOException(
@@ -116,12 +156,18 @@ public final class WorldStateStore {
                 "standby.seed"
             );
 
+        WorldRotationPhase phase =
+            parsePhase(
+                properties
+            );
+
         try {
             return new WorldRotationState(
                 activeAttempt,
                 activeSeed,
                 standbyAttempt,
-                standbySeed
+                standbySeed,
+                phase
             );
         } catch (
             IllegalArgumentException exception
@@ -137,13 +183,17 @@ public final class WorldStateStore {
         WorldRotationState state
     ) throws IOException {
 
-        Objects.requireNonNull(state);
+        Objects.requireNonNull(
+            state
+        );
 
         Path parent =
             stateFile.getParent();
 
         if (parent != null) {
-            Files.createDirectories(parent);
+            Files.createDirectories(
+                parent
+            );
         }
 
         Properties properties =
@@ -151,7 +201,14 @@ public final class WorldStateStore {
 
         properties.setProperty(
             "version",
-            Integer.toString(FORMAT_VERSION)
+            Integer.toString(
+                FORMAT_VERSION
+            )
+        );
+
+        properties.setProperty(
+            "phase",
+            state.phase().name()
         );
 
         properties.setProperty(
@@ -218,14 +275,34 @@ public final class WorldStateStore {
         }
     }
 
-    public Path getStateFile() {
-        return stateFile;
-    }
+    private WorldRotationPhase parsePhase(
+        Properties properties
+    ) throws IOException {
 
-    private long randomSeed() {
-        return ThreadLocalRandom
-            .current()
-            .nextLong();
+        String value =
+            properties.getProperty(
+                "phase"
+            );
+
+        if (value == null) {
+            throw new IOException(
+                "Missing world state property: phase"
+            );
+        }
+
+        try {
+            return WorldRotationPhase.valueOf(
+                value
+            );
+        } catch (
+            IllegalArgumentException exception
+        ) {
+            throw new IOException(
+                "Invalid world rotation phase: "
+                    + value,
+                exception
+            );
+        }
     }
 
     private int parseInt(
@@ -234,7 +311,9 @@ public final class WorldStateStore {
     ) throws IOException {
 
         String value =
-            properties.getProperty(key);
+            properties.getProperty(
+                key
+            );
 
         if (value == null) {
             throw new IOException(
@@ -244,7 +323,9 @@ public final class WorldStateStore {
         }
 
         try {
-            return Integer.parseInt(value);
+            return Integer.parseInt(
+                value
+            );
         } catch (
             NumberFormatException exception
         ) {
@@ -264,7 +345,9 @@ public final class WorldStateStore {
     ) throws IOException {
 
         String value =
-            properties.getProperty(key);
+            properties.getProperty(
+                key
+            );
 
         if (value == null) {
             throw new IOException(
@@ -274,7 +357,9 @@ public final class WorldStateStore {
         }
 
         try {
-            return Long.parseLong(value);
+            return Long.parseLong(
+                value
+            );
         } catch (
             NumberFormatException exception
         ) {
@@ -286,5 +371,30 @@ public final class WorldStateStore {
                 exception
             );
         }
+    }
+
+    private long randomSeed() {
+        return ThreadLocalRandom
+            .current()
+            .nextLong();
+    }
+
+    private long randomSeedDifferentFrom(
+        long otherSeed
+    ) {
+        long seed;
+
+        do {
+            seed =
+                randomSeed();
+        } while (
+            seed == otherSeed
+        );
+
+        return seed;
+    }
+
+    public Path getStateFile() {
+        return stateFile;
     }
 }

@@ -34,7 +34,7 @@ public final class WorldRotationManager {
     private final WorldCleanupManager worldCleanupManager;
 
     /*
-     * May be null when the sidebar is disabled.
+     * May be null when scoreboard.enabled=false.
      */
     private final HardcoreScoreboardManager scoreboardManager;
 
@@ -159,6 +159,13 @@ public final class WorldRotationManager {
 
             exception.printStackTrace();
 
+            /*
+             * If beginRotation() already persisted ROTATING,
+             * startup recovery will finish this transaction on
+             * the next server restart.
+             *
+             * We do not attempt to roll the transaction backward.
+             */
             moveEveryoneToSafety();
 
             return false;
@@ -192,11 +199,27 @@ public final class WorldRotationManager {
         );
 
         /*
-         * Everyone is already in spectator mode from the
-         * countdown phase.
+         * TRANSACTION BOUNDARY
          *
-         * Perform one final state wipe and teleport them into
-         * the prepared standby world.
+         * Persist our intention to advance BEFORE moving the
+         * first player.
+         *
+         * If Paper dies anywhere after this succeeds:
+         *
+         * phase=ROTATING
+         *
+         * tells startup recovery that the failed attempt must not
+         * resume and the standby attempt must become ACTIVE.
+         */
+        worldSetManager
+            .beginRotation();
+
+        /*
+         * Everyone should already be in spectator mode from the
+         * countdown.
+         *
+         * Perform the final state wipe and move all connected
+         * players into the prepared standby world.
          */
         for (
             Player player :
@@ -211,16 +234,21 @@ public final class WorldRotationManager {
         }
 
         /*
-         * Nobody should remain inside the old attempt now.
+         * STANDBY -> ACTIVE
+         * ACTIVE  -> RETIRED
          *
-         * Promote STANDBY -> ACTIVE and ACTIVE -> RETIRED.
+         * promoteStandby() also persists a new STABLE pipeline.
          */
         WorldSet retiredWorldSet =
             worldSetManager
                 .promoteStandby();
 
         /*
-         * Advance the persistent campaign attempt number.
+         * Advance persistent campaign statistics.
+         *
+         * If Paper crashes between promoteStandby() and this call,
+         * startup recovery detects activeWorld = stats + 1 and
+         * advances StatsManager automatically.
          */
         int advancedAttempt =
             statsManager
@@ -242,8 +270,7 @@ public final class WorldRotationManager {
         /*
          * RESETTING -> ACTIVE.
          *
-         * RunManager resets startedAt here, which restarts the
-         * scoreboard's elapsed timer from zero.
+         * This starts a fresh runtime timer.
          */
         if (!runManager.beginNextRun()) {
             throw new IllegalStateException(
@@ -267,14 +294,7 @@ public final class WorldRotationManager {
         );
 
         /*
-         * The previous attempt is now completely disposable.
-         *
-         * WorldCleanupManager handles:
-         *
-         * - waiting for a safe unload point
-         * - verifying there are no players inside
-         * - unloading End / Nether / Overworld
-         * - deleting the world folders asynchronously
+         * Dispose of the previous attempt.
          */
         boolean cleanupScheduled =
             worldCleanupManager
@@ -290,8 +310,10 @@ public final class WorldRotationManager {
         }
 
         /*
-         * Shortly afterward, create the standby world for the
-         * following attempt.
+         * Generate the next standby shortly afterward.
+         *
+         * Its attempt number and seed have already been persisted
+         * by promoteStandby().
          */
         scheduleReplacementStandby();
     }
@@ -398,9 +420,10 @@ public final class WorldRotationManager {
     }
 
     /**
-     * Emergency fallback if world rotation cannot be completed.
+     * Emergency fallback.
      *
-     * Players stay connected but are removed from gameplay.
+     * Players remain connected but are removed from campaign
+     * gameplay until the server can recover safely.
      */
     private void moveEveryoneToSafety() {
         Location lobbySpawn =
@@ -425,6 +448,11 @@ public final class WorldRotationManager {
                         player
                     );
 
+                /*
+                 * prepareForCountdown() may need to respawn a dead
+                 * player first, so defer the lobby teleport by one
+                 * tick as well.
+                 */
                 plugin.getServer()
                     .getScheduler()
                     .runTask(
@@ -471,7 +499,8 @@ public final class WorldRotationManager {
             Component.text(
                 "[Instigate Cafe Hardcore] "
                     + "World rotation failed. "
-                    + "Players have been moved to the safety lobby.",
+                    + "Players have been moved to the safety lobby. "
+                    + "A server restart will recover the world pipeline.",
                 NamedTextColor.RED
             )
         );
