@@ -1,20 +1,81 @@
 package dev.instigatehardcore.command;
 
+import dev.instigatehardcore.core.RunManager;
+import dev.instigatehardcore.participation.AttemptParticipant;
+import dev.instigatehardcore.participation.AttemptParticipantManager;
+import dev.instigatehardcore.stats.StatsManager;
+import dev.instigatehardcore.world.WorldCleanupManager;
+import dev.instigatehardcore.world.WorldRotationManager;
+import dev.instigatehardcore.world.WorldSet;
+import dev.instigatehardcore.world.WorldSetManager;
+
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
+
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 
+import java.time.Duration;
+
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
-public final class HardcoreCommand implements CommandExecutor {
+public final class HardcoreCommand
+    implements CommandExecutor {
 
-    private static final String BASE_PERMISSION =
-        "instigatehardcore.command";
+    private final RunManager runManager;
+    private final StatsManager statsManager;
+
+    private final AttemptParticipantManager participantManager;
+
+    private final WorldSetManager worldSetManager;
+    private final WorldRotationManager worldRotationManager;
+    private final WorldCleanupManager worldCleanupManager;
+
+    public HardcoreCommand(
+        RunManager runManager,
+        StatsManager statsManager,
+        AttemptParticipantManager participantManager,
+        WorldSetManager worldSetManager,
+        WorldRotationManager worldRotationManager,
+        WorldCleanupManager worldCleanupManager
+    ) {
+        this.runManager =
+            Objects.requireNonNull(
+                runManager
+            );
+
+        this.statsManager =
+            Objects.requireNonNull(
+                statsManager
+            );
+
+        this.participantManager =
+            Objects.requireNonNull(
+                participantManager
+            );
+
+        this.worldSetManager =
+            Objects.requireNonNull(
+                worldSetManager
+            );
+
+        this.worldRotationManager =
+            Objects.requireNonNull(
+                worldRotationManager
+            );
+
+        this.worldCleanupManager =
+            Objects.requireNonNull(
+                worldCleanupManager
+            );
+    }
 
     @Override
     public boolean onCommand(
@@ -23,19 +84,11 @@ public final class HardcoreCommand implements CommandExecutor {
         String label,
         String[] args
     ) {
-        Objects.requireNonNull(sender);
-        Objects.requireNonNull(command);
-        Objects.requireNonNull(label);
-        Objects.requireNonNull(args);
-
-        /*
-         * /hc
-         * /hardcore
-         *
-         * Both display the help page.
-         */
         if (args.length == 0) {
-            sendHelp(sender);
+            sendHelp(
+                sender
+            );
+
             return true;
         }
 
@@ -46,21 +99,16 @@ public final class HardcoreCommand implements CommandExecutor {
 
         return switch (subcommand) {
             case "help" -> {
-                sendHelp(sender);
+                sendHelp(
+                    sender
+                );
+
                 yield true;
             }
 
-            /*
-             * These commands will be implemented during the
-             * remaining Phase 7 steps.
-             *
-             * Keeping their dispatcher entries here gives us one
-             * authoritative command surface from the beginning.
-             */
             case "status" -> {
-                sendNotImplemented(
-                    sender,
-                    "status"
+                sendStatus(
+                    sender
                 );
 
                 yield true;
@@ -158,28 +206,36 @@ public final class HardcoreCommand implements CommandExecutor {
         };
     }
 
-    private void sendHelp(
+    private void sendStatus(
         CommandSender sender
     ) {
+        int attempt =
+            statsManager
+                .getCurrentAttempt();
+
+        List<AttemptParticipant> participants =
+            participantManager
+                .getParticipants(
+                    attempt
+                );
+
+        long activeOnline =
+            participants.stream()
+                .filter(
+                    this::isActiveOnline
+                )
+                .count();
+
+        WorldSet active =
+            worldSetManager
+                .getActiveWorldSet();
+
+        WorldSet standby =
+            worldSetManager
+                .getStandbyWorldSet();
+
         Component divider =
-            Component.text(
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                NamedTextColor.DARK_GRAY
-            );
-
-        Component brand =
-            Component.text(
-                "INSTIGATE CAFE HARDCORE",
-                NamedTextColor.GOLD
-            ).decorate(
-                TextDecoration.BOLD
-            );
-
-        Component subtitle =
-            Component.text(
-                "COMMANDS",
-                NamedTextColor.RED
-            );
+            divider();
 
         sender.sendMessage(
             Component.empty()
@@ -190,20 +246,346 @@ public final class HardcoreCommand implements CommandExecutor {
         );
 
         sender.sendMessage(
-            brand
+            Component.text(
+                "INSTIGATE CAFE HARDCORE",
+                NamedTextColor.GOLD
+            ).decorate(
+                TextDecoration.BOLD
+            )
         );
 
         sender.sendMessage(
-            subtitle
+            Component.text(
+                "SERVER STATUS",
+                NamedTextColor.RED
+            )
         );
 
         sender.sendMessage(
             Component.empty()
         );
 
-        /*
-         * Public commands.
-         */
+        sendStatusEntry(
+            sender,
+            "Attempt",
+            "#"
+                + attempt,
+            NamedTextColor.GOLD
+        );
+
+        sendStatusEntry(
+            sender,
+            "State",
+            runManager
+                .getState()
+                .name(),
+            runManager.isActive()
+                ? NamedTextColor.GREEN
+                : NamedTextColor.RED
+        );
+
+        sendStatusEntry(
+            sender,
+            "Run Time",
+            formatDuration(
+                runManager
+                    .getElapsedTime()
+            ),
+            NamedTextColor.WHITE
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            Component.text()
+                .append(
+                    Component.text(
+                        "PLAYERS  ",
+                        NamedTextColor.GOLD
+                    ).decorate(
+                        TextDecoration.BOLD
+                    )
+                )
+                .append(
+                    Component.text(
+                        activeOnline
+                            + " / "
+                            + participants.size(),
+                        NamedTextColor.WHITE
+                    )
+                )
+                .build()
+        );
+
+        if (participants.isEmpty()) {
+            sender.sendMessage(
+                Component.text(
+                    "No participants have entered this attempt yet.",
+                    NamedTextColor.DARK_GRAY
+                )
+            );
+        } else {
+            for (
+                AttemptParticipant participant :
+                participants
+            ) {
+                sendParticipant(
+                    sender,
+                    participant
+                );
+            }
+        }
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        if (active != null) {
+            sendStatusEntry(
+                sender,
+                "ACTIVE WORLD",
+                "Attempt #"
+                    + active.attemptNumber(),
+                NamedTextColor.GREEN
+            );
+        }
+
+        if (standby != null) {
+            sendStatusEntry(
+                sender,
+                "STANDBY WORLD",
+                "Attempt #"
+                    + standby.attemptNumber()
+                    + " • Ready",
+                NamedTextColor.AQUA
+            );
+        } else {
+            sendStatusEntry(
+                sender,
+                "STANDBY WORLD",
+                "Preparing",
+                NamedTextColor.YELLOW
+            );
+        }
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sendStatusEntry(
+            sender,
+            "Rotation",
+            worldRotationManager
+                .isRotationInProgress()
+                ? "In Progress"
+                : "Idle",
+            worldRotationManager
+                .isRotationInProgress()
+                ? NamedTextColor.YELLOW
+                : NamedTextColor.GRAY
+        );
+
+        sendStatusEntry(
+            sender,
+            "Cleanup",
+            worldCleanupManager
+                .isCleanupInProgress()
+                ? "In Progress"
+                : "Idle",
+            worldCleanupManager
+                .isCleanupInProgress()
+                ? NamedTextColor.YELLOW
+                : NamedTextColor.GRAY
+        );
+
+        sender.sendMessage(
+            divider
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+    }
+
+    private void sendParticipant(
+        CommandSender sender,
+        AttemptParticipant participant
+    ) {
+        Player player =
+            Bukkit.getPlayer(
+                participant.uuid()
+            );
+
+        boolean online =
+            player != null
+                && player.isOnline();
+
+        boolean active =
+            online
+                && worldSetManager
+                    .isActiveWorld(
+                        player.getWorld()
+                    );
+
+        NamedTextColor nameColor =
+            active
+                ? NamedTextColor.GREEN
+                : online
+                    ? NamedTextColor.YELLOW
+                    : NamedTextColor.GRAY;
+
+        String state;
+
+        NamedTextColor stateColor;
+
+        if (active) {
+            state =
+                "Online";
+
+            stateColor =
+                NamedTextColor.GREEN;
+        } else if (online) {
+            state =
+                "Online • Outside Run";
+
+            stateColor =
+                NamedTextColor.YELLOW;
+        } else {
+            state =
+                "Offline";
+
+            stateColor =
+                NamedTextColor.DARK_GRAY;
+        }
+
+        sender.sendMessage(
+            Component.text()
+                .append(
+                    Component.text(
+                        participant.name(),
+                        nameColor
+                    )
+                )
+                .append(
+                    Component.text(
+                        "  •  ",
+                        NamedTextColor.DARK_GRAY
+                    )
+                )
+                .append(
+                    Component.text(
+                        state,
+                        stateColor
+                    )
+                )
+                .build()
+        );
+    }
+
+    private boolean isActiveOnline(
+        AttemptParticipant participant
+    ) {
+        Player player =
+            Bukkit.getPlayer(
+                participant.uuid()
+            );
+
+        return player != null
+            && player.isOnline()
+            && worldSetManager
+                .isActiveWorld(
+                    player.getWorld()
+                );
+    }
+
+    private void sendStatusEntry(
+        CommandSender sender,
+        String label,
+        String value,
+        NamedTextColor valueColor
+    ) {
+        sender.sendMessage(
+            Component.text()
+                .append(
+                    Component.text(
+                        label + "  ",
+                        NamedTextColor.GRAY
+                    )
+                )
+                .append(
+                    Component.text(
+                        value,
+                        valueColor
+                    )
+                )
+                .build()
+        );
+    }
+
+    private String formatDuration(
+        Duration duration
+    ) {
+        long totalSeconds =
+            Math.max(
+                0L,
+                duration.getSeconds()
+            );
+
+        long hours =
+            totalSeconds / 3600;
+
+        long minutes =
+            (
+                totalSeconds % 3600
+            ) / 60;
+
+        long seconds =
+            totalSeconds % 60;
+
+        return String.format(
+            "%02d:%02d:%02d",
+            hours,
+            minutes,
+            seconds
+        );
+    }
+
+    private void sendHelp(
+        CommandSender sender
+    ) {
+        Component divider =
+            divider();
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            divider
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "INSTIGATE CAFE HARDCORE",
+                NamedTextColor.GOLD
+            ).decorate(
+                TextDecoration.BOLD
+            )
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "COMMANDS",
+                NamedTextColor.RED
+            )
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
         sendHelpEntry(
             sender,
             "/hc help",
@@ -213,7 +595,7 @@ public final class HardcoreCommand implements CommandExecutor {
         sendHelpEntry(
             sender,
             "/hc status",
-            "Show the current hardcore attempt and participants."
+            "Show the current attempt and participants."
         );
 
         sendHelpEntry(
@@ -234,10 +616,6 @@ public final class HardcoreCommand implements CommandExecutor {
             "Show the server death leaderboard."
         );
 
-        /*
-         * Only show administrative commands to people who
-         * actually have access to them.
-         */
         if (
             sender.hasPermission(
                 "instigatehardcore.admin"
@@ -306,7 +684,7 @@ public final class HardcoreCommand implements CommandExecutor {
         String syntax,
         String description
     ) {
-        Component message =
+        sender.sendMessage(
             Component.text()
                 .append(
                     Component.text(
@@ -326,10 +704,7 @@ public final class HardcoreCommand implements CommandExecutor {
                         NamedTextColor.GRAY
                     )
                 )
-                .build();
-
-        sender.sendMessage(
-            message
+                .build()
         );
     }
 
@@ -393,6 +768,13 @@ public final class HardcoreCommand implements CommandExecutor {
                 "You do not have permission to use that command.",
                 NamedTextColor.RED
             )
+        );
+    }
+
+    private Component divider() {
+        return Component.text(
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            NamedTextColor.DARK_GRAY
         );
     }
 }

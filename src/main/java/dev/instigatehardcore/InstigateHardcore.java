@@ -2,14 +2,20 @@ package dev.instigatehardcore;
 
 import dev.instigatehardcore.command.HardcoreCommand;
 import dev.instigatehardcore.command.HardcoreTabCompleter;
+
 import dev.instigatehardcore.core.RunManager;
 import dev.instigatehardcore.countdown.CountdownManager;
+
 import dev.instigatehardcore.listener.DeathListener;
 import dev.instigatehardcore.listener.PlayerJoinListener;
 import dev.instigatehardcore.listener.PortalRoutingListener;
+
+import dev.instigatehardcore.participation.AttemptParticipantManager;
+
 import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
+
 import dev.instigatehardcore.world.WorldCleanupManager;
 import dev.instigatehardcore.world.WorldRecoveryManager;
 import dev.instigatehardcore.world.WorldRotationManager;
@@ -35,7 +41,9 @@ public final class InstigateHardcore extends JavaPlugin {
         1;
 
     private RunManager runManager;
+
     private StatsManager statsManager;
+    private AttemptParticipantManager participantManager;
 
     private CountdownManager countdownManager;
     private HardcoreScoreboardManager scoreboardManager;
@@ -53,24 +61,32 @@ public final class InstigateHardcore extends JavaPlugin {
         saveDefaultConfig();
 
         /*
-         * Persistent player and campaign statistics must load
-         * before world recovery.
+         * Campaign/player statistics are needed before Phase 6
+         * world recovery.
          */
         if (!initializeStats()) {
             return;
         }
 
         /*
-         * Recover persistent world state, then load the ACTIVE
-         * and STANDBY attempt worlds.
+         * Recover the authoritative campaign attempt and load the
+         * ACTIVE/STANDBY world pipeline.
          */
         if (!initializeWorldSets()) {
             return;
         }
 
         /*
-         * Runtime gameplay only becomes ACTIVE after the persistent
-         * world pipeline has been recovered successfully.
+         * Participant tracking must initialize AFTER world
+         * recovery because recovery may advance the attempt.
+         */
+        if (!initializeParticipants()) {
+            return;
+        }
+
+        /*
+         * Runtime gameplay becomes active only after persistent
+         * campaign state has initialized successfully.
          */
         runManager =
             new RunManager();
@@ -99,14 +115,6 @@ public final class InstigateHardcore extends JavaPlugin {
 
         registerListeners();
 
-        /*
-         * Phase 7A command framework.
-         *
-         * Registers:
-         *
-         * /hardcore
-         * /hc
-         */
         if (!initializeCommands()) {
             return;
         }
@@ -145,14 +153,26 @@ public final class InstigateHardcore extends JavaPlugin {
             }
         }
 
+        if (participantManager != null) {
+            try {
+                participantManager.save();
+            } catch (
+                IOException exception
+            ) {
+                getLogger().severe(
+                    "Failed to save attempt participation history "
+                        + "during shutdown."
+                );
+
+                exception.printStackTrace();
+            }
+        }
+
         getLogger().info(
             "Instigate Cafe Hardcore disabled."
         );
     }
 
-    /**
-     * Loads persistent campaign/player statistics.
-     */
     private boolean initializeStats() {
         Path statsPath =
             getDataFolder()
@@ -188,8 +208,7 @@ public final class InstigateHardcore extends JavaPlugin {
     }
 
     /**
-     * Performs crash/restart recovery first, then loads the
-     * persistent ACTIVE and STANDBY WorldSets.
+     * Runs Phase 6 recovery and loads ACTIVE/STANDBY worlds.
      */
     private boolean initializeWorldSets() {
         String lobbyWorldName =
@@ -245,10 +264,6 @@ public final class InstigateHardcore extends JavaPlugin {
                 worldStateStore
             );
 
-        /*
-         * Persistent state reconciliation happens before custom
-         * campaign worlds are loaded.
-         */
         try {
             WorldRecoveryManager.RecoveryResult recovery =
                 worldRecoveryManager
@@ -333,8 +348,45 @@ public final class InstigateHardcore extends JavaPlugin {
     }
 
     /**
-     * Initializes the countdown that runs after an attempt ends.
+     * Loads persistent participant history and guarantees the
+     * current recovered attempt has its own participant set.
      */
+    private boolean initializeParticipants() {
+        participantManager =
+            new AttemptParticipantManager(
+                getDataFolder()
+                    .toPath()
+                    .resolve(
+                        "attempt-participants.properties"
+                    )
+            );
+
+        try {
+            participantManager.load();
+
+            participantManager.ensureAttempt(
+                statsManager
+                    .getCurrentAttempt()
+            );
+
+            return true;
+        } catch (
+            IOException exception
+        ) {
+            getLogger().severe(
+                "Unable to load attempt participation history."
+            );
+
+            exception.printStackTrace();
+
+            getServer()
+                .getPluginManager()
+                .disablePlugin(this);
+
+            return false;
+        }
+    }
+
     private void initializeCountdown() {
         int configuredSeconds =
             getConfig().getInt(
@@ -362,9 +414,6 @@ public final class InstigateHardcore extends JavaPlugin {
             );
     }
 
-    /**
-     * Initializes the sidebar scoreboard when enabled.
-     */
     private void initializeScoreboard() {
         boolean enabled =
             getConfig().getBoolean(
@@ -411,9 +460,6 @@ public final class InstigateHardcore extends JavaPlugin {
             );
     }
 
-    /**
-     * Initializes retired-world unloading and deletion.
-     */
     private void initializeWorldCleanup() {
         worldCleanupManager =
             new WorldCleanupManager(
@@ -422,9 +468,6 @@ public final class InstigateHardcore extends JavaPlugin {
             );
     }
 
-    /**
-     * Initializes seamless ACTIVE/STANDBY attempt rotation.
-     */
     private void initializeWorldRotation() {
         worldRotationManager =
             new WorldRotationManager(
@@ -434,13 +477,11 @@ public final class InstigateHardcore extends JavaPlugin {
                 playerResetManager,
                 worldSetManager,
                 worldCleanupManager,
+                participantManager,
                 scoreboardManager
             );
     }
 
-    /**
-     * Registers all Paper/Bukkit listeners.
-     */
     private void registerListeners() {
         getServer()
             .getPluginManager()
@@ -457,10 +498,6 @@ public final class InstigateHardcore extends JavaPlugin {
                 this
             );
 
-        /*
-         * Keep Nether and End travel isolated to the current
-         * ACTIVE attempt.
-         */
         getServer()
             .getPluginManager()
             .registerEvents(
@@ -472,14 +509,6 @@ public final class InstigateHardcore extends JavaPlugin {
                 this
             );
 
-        /*
-         * PlayerJoinListener is responsible for:
-         *
-         * - registering player stats
-         * - assigning scoreboard
-         * - placing stale players into ACTIVE
-         * - recovering players stuck in spectator mode
-         */
         getServer()
             .getPluginManager()
             .registerEvents(
@@ -489,14 +518,18 @@ public final class InstigateHardcore extends JavaPlugin {
                     scoreboardManager,
                     runManager,
                     playerResetManager,
-                    worldSetManager
+                    worldSetManager,
+                    participantManager
                 ),
                 this
             );
     }
 
     /**
-     * Registers Phase 7 command handling.
+     * Registers:
+     *
+     * /hardcore
+     * /hc
      */
     private boolean initializeCommands() {
         PluginCommand hardcoreCommand =
@@ -519,7 +552,14 @@ public final class InstigateHardcore extends JavaPlugin {
         }
 
         HardcoreCommand executor =
-            new HardcoreCommand();
+            new HardcoreCommand(
+                runManager,
+                statsManager,
+                participantManager,
+                worldSetManager,
+                worldRotationManager,
+                worldCleanupManager
+            );
 
         HardcoreTabCompleter tabCompleter =
             new HardcoreTabCompleter();
@@ -540,8 +580,8 @@ public final class InstigateHardcore extends JavaPlugin {
     }
 
     /**
-     * Supports development reloads or other cases where players
-     * are already online when plugin initialization completes.
+     * Supports development reloads or other scenarios where
+     * players are already online during plugin initialization.
      */
     private void registerExistingPlayers() {
         for (
@@ -566,6 +606,38 @@ public final class InstigateHardcore extends JavaPlugin {
                 exception.printStackTrace();
             }
 
+            /*
+             * If an already-online player is currently inside the
+             * recovered ACTIVE attempt, make sure they count as a
+             * participant as well.
+             */
+            if (
+                runManager.isActive()
+                    && worldSetManager.isActiveWorld(
+                        player.getWorld()
+                    )
+            ) {
+                try {
+                    participantManager
+                        .recordParticipant(
+                            statsManager
+                                .getCurrentAttempt(),
+                            player.getUniqueId(),
+                            player.getName()
+                        );
+                } catch (
+                    IOException exception
+                ) {
+                    getLogger().severe(
+                        "Failed to record participation for "
+                            + player.getName()
+                            + "."
+                    );
+
+                    exception.printStackTrace();
+                }
+            }
+
             if (scoreboardManager != null) {
                 scoreboardManager.assign(
                     player
@@ -578,9 +650,6 @@ public final class InstigateHardcore extends JavaPlugin {
         }
     }
 
-    /**
-     * Logs the final initialized state.
-     */
     private void logStartupState() {
         getLogger().info(
             "Instigate Cafe Hardcore enabled."
@@ -596,6 +665,15 @@ public final class InstigateHardcore extends JavaPlugin {
             "Run state: "
                 + runManager
                     .getState()
+        );
+
+        getLogger().info(
+            "Current attempt participants: "
+                + participantManager
+                    .getParticipantCount(
+                        statsManager
+                            .getCurrentAttempt()
+                    )
         );
 
         getLogger().info(
@@ -646,6 +724,10 @@ public final class InstigateHardcore extends JavaPlugin {
         );
 
         getLogger().info(
+            "Attempt participation tracking enabled."
+        );
+
+        getLogger().info(
             "Hardcore command framework enabled."
         );
     }
@@ -656,6 +738,10 @@ public final class InstigateHardcore extends JavaPlugin {
 
     public StatsManager getStatsManager() {
         return statsManager;
+    }
+
+    public AttemptParticipantManager getParticipantManager() {
+        return participantManager;
     }
 
     public CountdownManager getCountdownManager() {

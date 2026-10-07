@@ -1,6 +1,7 @@
 package dev.instigatehardcore.world;
 
 import dev.instigatehardcore.core.RunManager;
+import dev.instigatehardcore.participation.AttemptParticipantManager;
 import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
@@ -25,6 +26,7 @@ public final class WorldRotationManager {
         40L;
 
     private final JavaPlugin plugin;
+
     private final RunManager runManager;
     private final StatsManager statsManager;
 
@@ -32,6 +34,8 @@ public final class WorldRotationManager {
 
     private final WorldSetManager worldSetManager;
     private final WorldCleanupManager worldCleanupManager;
+
+    private final AttemptParticipantManager participantManager;
 
     /*
      * May be null when scoreboard.enabled=false.
@@ -47,6 +51,7 @@ public final class WorldRotationManager {
         PlayerResetManager playerResetManager,
         WorldSetManager worldSetManager,
         WorldCleanupManager worldCleanupManager,
+        AttemptParticipantManager participantManager,
         HardcoreScoreboardManager scoreboardManager
     ) {
         this.plugin =
@@ -71,6 +76,11 @@ public final class WorldRotationManager {
         this.worldCleanupManager =
             Objects.requireNonNull(
                 worldCleanupManager
+            );
+
+        this.participantManager =
+            Objects.requireNonNull(
+                participantManager
             );
 
         this.scoreboardManager =
@@ -159,13 +169,6 @@ public final class WorldRotationManager {
 
             exception.printStackTrace();
 
-            /*
-             * If beginRotation() already persisted ROTATING,
-             * startup recovery will finish this transaction on
-             * the next server restart.
-             *
-             * We do not attempt to roll the transaction backward.
-             */
             moveEveryoneToSafety();
 
             return false;
@@ -199,27 +202,26 @@ public final class WorldRotationManager {
         );
 
         /*
-         * TRANSACTION BOUNDARY
-         *
-         * Persist our intention to advance BEFORE moving the
-         * first player.
-         *
-         * If Paper dies anywhere after this succeeds:
-         *
-         * phase=ROTATING
-         *
-         * tells startup recovery that the failed attempt must not
-         * resume and the standby attempt must become ACTIVE.
+         * Persist the world-rotation transaction before touching
+         * players.
          */
         worldSetManager
             .beginRotation();
 
         /*
-         * Everyone should already be in spectator mode from the
-         * countdown.
+         * Create an empty persistent participant record for the
+         * new attempt.
          *
-         * Perform the final state wipe and move all connected
-         * players into the prepared standby world.
+         * Existing history from previous attempts remains intact.
+         */
+        participantManager
+            .ensureAttempt(
+                newAttempt
+            );
+
+        /*
+         * Everyone currently online enters the next attempt and
+         * therefore immediately becomes one of its participants.
          */
         for (
             Player player :
@@ -231,13 +233,18 @@ public final class WorldRotationManager {
                     player,
                     newSpawn
                 );
+
+            participantManager
+                .recordParticipant(
+                    newAttempt,
+                    player.getUniqueId(),
+                    player.getName()
+                );
         }
 
         /*
          * STANDBY -> ACTIVE
          * ACTIVE  -> RETIRED
-         *
-         * promoteStandby() also persists a new STABLE pipeline.
          */
         WorldSet retiredWorldSet =
             worldSetManager
@@ -245,10 +252,6 @@ public final class WorldRotationManager {
 
         /*
          * Advance persistent campaign statistics.
-         *
-         * If Paper crashes between promoteStandby() and this call,
-         * startup recovery detects activeWorld = stats + 1 and
-         * advances StatsManager automatically.
          */
         int advancedAttempt =
             statsManager
@@ -268,9 +271,7 @@ public final class WorldRotationManager {
         }
 
         /*
-         * RESETTING -> ACTIVE.
-         *
-         * This starts a fresh runtime timer.
+         * RESETTING -> ACTIVE and restart the run timer.
          */
         if (!runManager.beginNextRun()) {
             throw new IllegalStateException(
@@ -290,11 +291,16 @@ public final class WorldRotationManager {
             "[Instigate Cafe Hardcore] "
                 + "Attempt #"
                 + newAttempt
-                + " is now ACTIVE."
+                + " is now ACTIVE with "
+                + participantManager
+                    .getParticipantCount(
+                        newAttempt
+                    )
+                + " participant(s)."
         );
 
         /*
-         * Dispose of the previous attempt.
+         * Safely remove the old attempt.
          */
         boolean cleanupScheduled =
             worldCleanupManager
@@ -310,10 +316,7 @@ public final class WorldRotationManager {
         }
 
         /*
-         * Generate the next standby shortly afterward.
-         *
-         * Its attempt number and seed have already been persisted
-         * by promoteStandby().
+         * Prepare the following attempt.
          */
         scheduleReplacementStandby();
     }
@@ -420,10 +423,7 @@ public final class WorldRotationManager {
     }
 
     /**
-     * Emergency fallback.
-     *
-     * Players remain connected but are removed from campaign
-     * gameplay until the server can recover safely.
+     * Emergency fallback if rotation fails.
      */
     private void moveEveryoneToSafety() {
         Location lobbySpawn =
@@ -448,11 +448,6 @@ public final class WorldRotationManager {
                         player
                     );
 
-                /*
-                 * prepareForCountdown() may need to respawn a dead
-                 * player first, so defer the lobby teleport by one
-                 * tick as well.
-                 */
                 plugin.getServer()
                     .getScheduler()
                     .runTask(

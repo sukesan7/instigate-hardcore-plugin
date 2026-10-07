@@ -1,6 +1,7 @@
 package dev.instigatehardcore.listener;
 
 import dev.instigatehardcore.core.RunManager;
+import dev.instigatehardcore.participation.AttemptParticipantManager;
 import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
@@ -25,9 +26,12 @@ public final class PlayerJoinListener implements Listener {
     private final JavaPlugin plugin;
     private final StatsManager statsManager;
     private final HardcoreScoreboardManager scoreboardManager;
+
     private final RunManager runManager;
     private final PlayerResetManager playerResetManager;
     private final WorldSetManager worldSetManager;
+
+    private final AttemptParticipantManager participantManager;
 
     public PlayerJoinListener(
         JavaPlugin plugin,
@@ -35,7 +39,8 @@ public final class PlayerJoinListener implements Listener {
         HardcoreScoreboardManager scoreboardManager,
         RunManager runManager,
         PlayerResetManager playerResetManager,
-        WorldSetManager worldSetManager
+        WorldSetManager worldSetManager,
+        AttemptParticipantManager participantManager
     ) {
         this.plugin =
             Objects.requireNonNull(plugin);
@@ -61,6 +66,11 @@ public final class PlayerJoinListener implements Listener {
             Objects.requireNonNull(
                 worldSetManager
             );
+
+        this.participantManager =
+            Objects.requireNonNull(
+                participantManager
+            );
     }
 
     @EventHandler
@@ -83,8 +93,9 @@ public final class PlayerJoinListener implements Listener {
         }
 
         /*
-         * Wait until Paper has finished its normal login/world
-         * restoration before enforcing campaign state.
+         * Give Paper time to finish restoring the player's
+         * saved world/location/gamemode before enforcing
+         * hardcore campaign state.
          */
         plugin.getServer()
             .getScheduler()
@@ -134,8 +145,8 @@ public final class PlayerJoinListener implements Listener {
         }
 
         /*
-         * A player joining while ENDING or RESETTING may not
-         * participate in gameplay.
+         * Anyone joining while the run is ENDING or RESETTING
+         * must stay outside normal gameplay.
          */
         sendToSafetyLobby(
             player
@@ -151,8 +162,10 @@ public final class PlayerJoinListener implements Listener {
                 .getSpawnLocation();
 
         /*
-         * If Paper restored this player into a stale world from
-         * an older attempt, perform the complete attempt reset.
+         * Player belongs to an old attempt, lobby world,
+         * or some other stale world.
+         *
+         * Give them a clean entry into the current attempt.
          */
         if (
             !worldSetManager.isActiveWorld(
@@ -165,6 +178,14 @@ public final class PlayerJoinListener implements Listener {
                         player,
                         activeSpawn
                     );
+
+                recordParticipation(
+                    player
+                );
+
+                scheduleActiveStateVerification(
+                    player
+                );
             } catch (
                 RuntimeException exception
             ) {
@@ -179,34 +200,84 @@ public final class PlayerJoinListener implements Listener {
                 sendToSafetyLobby(
                     player
                 );
-
-                return;
             }
-
-            scheduleActiveStateVerification(
-                player
-            );
 
             return;
         }
 
         /*
-         * The player is already in the current ACTIVE WorldSet.
+         * Returning player is already inside the current attempt.
          *
-         * Preserve their inventory and position on an ordinary
-         * reconnect, but normalize gameplay state.
-         *
-         * This is especially important after crash recovery:
-         * Paper may restore a player in the newly recovered
-         * ACTIVE world while their saved gamemode is SPECTATOR.
+         * Preserve their inventory/location, but ensure Paper has
+         * not restored them in spectator mode after recovery.
          */
         normalizeActivePlayer(
+            player
+        );
+
+        recordParticipation(
             player
         );
 
         scheduleActiveStateVerification(
             player
         );
+    }
+
+    /**
+     * Records this player as a participant in the current attempt.
+     *
+     * Their UUID is only counted once for that attempt.
+     */
+    private void recordParticipation(
+        Player player
+    ) {
+        if (!player.isOnline()) {
+            return;
+        }
+
+        if (!runManager.isActive()) {
+            return;
+        }
+
+        if (
+            !worldSetManager.isActiveWorld(
+                player.getWorld()
+            )
+        ) {
+            return;
+        }
+
+        try {
+            boolean firstParticipation =
+                participantManager
+                    .recordParticipant(
+                        statsManager
+                            .getCurrentAttempt(),
+                        player.getUniqueId(),
+                        player.getName()
+                    );
+
+            if (firstParticipation) {
+                plugin.getLogger().info(
+                    "[Instigate Cafe Hardcore] "
+                        + player.getName()
+                        + " joined attempt #"
+                        + statsManager.getCurrentAttempt()
+                        + " as a participant."
+                );
+            }
+        } catch (
+            IOException exception
+        ) {
+            plugin.getLogger().severe(
+                "Failed to record attempt participation for "
+                    + player.getName()
+                    + "."
+            );
+
+            exception.printStackTrace();
+        }
     }
 
     private void normalizeActivePlayer(
@@ -250,11 +321,8 @@ public final class PlayerJoinListener implements Listener {
     }
 
     /**
-     * Paper/vanilla login restoration can make changes shortly
-     * after PlayerJoinEvent.
-     *
-     * Verify the state again a couple of ticks later so recovery
-     * cannot leave somebody stuck in spectator mode.
+     * Paper may apply additional login state shortly after the
+     * join event, so verify gameplay state again a few ticks later.
      */
     private void scheduleActiveStateVerification(
         Player player
@@ -280,6 +348,14 @@ public final class PlayerJoinListener implements Listener {
                         normalizeActivePlayer(
                             player
                         );
+
+                        /*
+                         * Idempotent. This also helps guarantee
+                         * participation is recorded after recovery.
+                         */
+                        recordParticipation(
+                            player
+                        );
                     }
                 },
                 JOIN_VERIFICATION_DELAY_TICKS
@@ -295,8 +371,8 @@ public final class PlayerJoinListener implements Listener {
             );
 
         /*
-         * prepareForCountdown() may first need to respawn a dead
-         * player, so defer the actual lobby teleport.
+         * prepareForCountdown() may need to respawn a dead player,
+         * so defer the lobby teleport by another tick.
          */
         plugin.getServer()
             .getScheduler()
