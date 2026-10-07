@@ -2,16 +2,25 @@ package dev.instigatehardcore.command;
 
 import dev.instigatehardcore.core.AttemptEndManager;
 import dev.instigatehardcore.core.RunManager;
+
+import dev.instigatehardcore.countdown.CountdownManager;
+
 import dev.instigatehardcore.participation.AttemptParticipant;
 import dev.instigatehardcore.participation.AttemptParticipantManager;
+
 import dev.instigatehardcore.stats.PlayerStats;
 import dev.instigatehardcore.stats.StatsManager;
+
 import dev.instigatehardcore.telemetry.PlayerDeathRecord;
 import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
+
 import dev.instigatehardcore.world.WorldCleanupManager;
 import dev.instigatehardcore.world.WorldRotationManager;
+import dev.instigatehardcore.world.WorldRotationPhase;
+import dev.instigatehardcore.world.WorldRotationState;
 import dev.instigatehardcore.world.WorldSet;
 import dev.instigatehardcore.world.WorldSetManager;
+import dev.instigatehardcore.world.WorldStateStore;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -23,9 +32,12 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.io.IOException;
+
 import java.time.Duration;
 import java.time.Instant;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -50,6 +62,9 @@ public final class HardcoreCommand
     private final WorldRotationManager worldRotationManager;
     private final WorldCleanupManager worldCleanupManager;
 
+    private final CountdownManager countdownManager;
+    private final WorldStateStore worldStateStore;
+
     private final AttemptEndManager attemptEndManager;
 
     private final Map<String, ResetConfirmation> resetConfirmations =
@@ -63,6 +78,8 @@ public final class HardcoreCommand
         WorldSetManager worldSetManager,
         WorldRotationManager worldRotationManager,
         WorldCleanupManager worldCleanupManager,
+        CountdownManager countdownManager,
+        WorldStateStore worldStateStore,
         AttemptEndManager attemptEndManager
     ) {
         this.runManager =
@@ -98,6 +115,16 @@ public final class HardcoreCommand
         this.worldCleanupManager =
             Objects.requireNonNull(
                 worldCleanupManager
+            );
+
+        this.countdownManager =
+            Objects.requireNonNull(
+                countdownManager
+            );
+
+        this.worldStateStore =
+            Objects.requireNonNull(
+                worldStateStore
             );
 
         this.attemptEndManager =
@@ -194,9 +221,8 @@ public final class HardcoreCommand
                     yield true;
                 }
 
-                sendNotImplemented(
-                    sender,
-                    "worlds"
+                sendWorlds(
+                    sender
                 );
 
                 yield true;
@@ -215,9 +241,8 @@ public final class HardcoreCommand
                     yield true;
                 }
 
-                sendNotImplemented(
-                    sender,
-                    "debug"
+                sendDebug(
+                    sender
                 );
 
                 yield true;
@@ -332,12 +357,7 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            Component.text(
-                "INSTIGATE CAFE HARDCORE",
-                NamedTextColor.GOLD
-            ).decorate(
-                TextDecoration.BOLD
-            )
+            brand()
         );
 
         sender.sendMessage(
@@ -421,8 +441,11 @@ public final class HardcoreCommand
             );
 
         if (confirmation == null) {
-            sendMissingResetConfirmation(
-                sender
+            sender.sendMessage(
+                Component.text(
+                    "No active reset confirmation. Run /hc reset first.",
+                    NamedTextColor.RED
+                )
             );
 
             return;
@@ -494,17 +517,6 @@ public final class HardcoreCommand
         }
     }
 
-    private void sendMissingResetConfirmation(
-        CommandSender sender
-    ) {
-        sender.sendMessage(
-            Component.text(
-                "No active reset confirmation. Run /hc reset first.",
-                NamedTextColor.RED
-            )
-        );
-    }
-
     private String resetConfirmationKey(
         CommandSender sender
     ) {
@@ -513,8 +525,7 @@ public final class HardcoreCommand
                 instanceof Player player
         ) {
             return "player:"
-                + player
-                    .getUniqueId();
+                + player.getUniqueId();
         }
 
         return "sender:"
@@ -633,9 +644,10 @@ public final class HardcoreCommand
         String name
     ) {
         int deaths =
-            statsManager.getDeaths(
-                uuid
-            );
+            statsManager
+                .getDeaths(
+                    uuid
+                );
 
         int attemptsPlayed =
             participantManager
@@ -677,12 +689,7 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            Component.text(
-                "INSTIGATE CAFE HARDCORE",
-                NamedTextColor.GOLD
-            ).decorate(
-                TextDecoration.BOLD
-            )
+            brand()
         );
 
         sender.sendMessage(
@@ -870,12 +877,7 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            Component.text(
-                "INSTIGATE CAFE HARDCORE",
-                NamedTextColor.GOLD
-            ).decorate(
-                TextDecoration.BOLD
-            )
+            brand()
         );
 
         sender.sendMessage(
@@ -948,7 +950,8 @@ public final class HardcoreCommand
             Component.text()
                 .append(
                     Component.text(
-                        rank + ". ",
+                        rank
+                            + ". ",
                         NamedTextColor.GOLD
                     )
                 )
@@ -1127,12 +1130,7 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            Component.text(
-                "INSTIGATE CAFE HARDCORE",
-                NamedTextColor.GOLD
-            ).decorate(
-                TextDecoration.BOLD
-            )
+            brand()
         );
 
         sender.sendMessage(
@@ -1382,6 +1380,588 @@ public final class HardcoreCommand
 
     /*
      * ------------------------------------------------------------
+     * WORLD DIAGNOSTICS
+     * ------------------------------------------------------------
+     */
+
+    private void sendWorlds(
+        CommandSender sender
+    ) {
+        WorldSet active =
+            worldSetManager
+                .getActiveWorldSet();
+
+        WorldSet standby =
+            worldSetManager
+                .getStandbyWorldSet();
+
+        WorldSet retired =
+            worldSetManager
+                .getRetiredWorldSet();
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            divider()
+        );
+
+        sender.sendMessage(
+            brand()
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "WORLD DIAGNOSTICS",
+                NamedTextColor.RED
+            )
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sendWorldSetSection(
+            sender,
+            "ACTIVE",
+            active,
+            NamedTextColor.GREEN
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sendWorldSetSection(
+            sender,
+            "STANDBY",
+            standby,
+            NamedTextColor.AQUA
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sendWorldSetSection(
+            sender,
+            "RETIRED",
+            retired,
+            NamedTextColor.GRAY
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        try {
+            WorldRotationState state =
+                worldStateStore
+                    .load();
+
+            sendStatusEntry(
+                sender,
+                "Persistent Phase",
+                state
+                    .phase()
+                    .name(),
+                state.phase()
+                    == WorldRotationPhase.STABLE
+                        ? NamedTextColor.GREEN
+                        : NamedTextColor.YELLOW
+            );
+        } catch (
+            IOException exception
+        ) {
+            sendStatusEntry(
+                sender,
+                "Persistent Phase",
+                "ERROR",
+                NamedTextColor.RED
+            );
+        }
+
+        sender.sendMessage(
+            divider()
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+    }
+
+    private void sendWorldSetSection(
+        CommandSender sender,
+        String title,
+        WorldSet worldSet,
+        NamedTextColor titleColor
+    ) {
+        sender.sendMessage(
+            Component.text(
+                title,
+                titleColor
+            ).decorate(
+                TextDecoration.BOLD
+            )
+        );
+
+        if (worldSet == null) {
+            sender.sendMessage(
+                Component.text(
+                    "None",
+                    NamedTextColor.DARK_GRAY
+                )
+            );
+
+            return;
+        }
+
+        sendStatusEntry(
+            sender,
+            "Attempt",
+            "#"
+                + worldSet
+                    .attemptNumber(),
+            NamedTextColor.WHITE
+        );
+
+        sendStatusEntry(
+            sender,
+            "Seed",
+            Long.toString(
+                worldSet
+                    .seed()
+            ),
+            NamedTextColor.GRAY
+        );
+
+        sendStatusEntry(
+            sender,
+            "Overworld",
+            worldSet
+                .overworld()
+                .getName(),
+            NamedTextColor.WHITE
+        );
+
+        sendStatusEntry(
+            sender,
+            "Nether",
+            worldSet
+                .nether()
+                .getName(),
+            NamedTextColor.WHITE
+        );
+
+        sendStatusEntry(
+            sender,
+            "End",
+            worldSet
+                .end()
+                .getName(),
+            NamedTextColor.WHITE
+        );
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * DEBUG
+     * ------------------------------------------------------------
+     */
+
+    private void sendDebug(
+        CommandSender sender
+    ) {
+        int statsAttempt =
+            statsManager
+                .getCurrentAttempt();
+
+        WorldSet active =
+            worldSetManager
+                .getActiveWorldSet();
+
+        WorldSet standby =
+            worldSetManager
+                .getStandbyWorldSet();
+
+        WorldSet retired =
+            worldSetManager
+                .getRetiredWorldSet();
+
+        List<String> warnings =
+            new ArrayList<>();
+
+        WorldRotationState persistentState =
+            null;
+
+        try {
+            persistentState =
+                worldStateStore
+                    .load();
+        } catch (
+            IOException exception
+        ) {
+            warnings.add(
+                "Unable to read persistent world state."
+            );
+        }
+
+        /*
+         * Campaign attempt must match ACTIVE.
+         */
+        if (active == null) {
+            warnings.add(
+                "ACTIVE WorldSet is missing."
+            );
+        } else if (
+            active.attemptNumber()
+                != statsAttempt
+        ) {
+            warnings.add(
+                "Stats attempt #"
+                    + statsAttempt
+                    + " != ACTIVE #"
+                    + active.attemptNumber()
+                    + "."
+            );
+        }
+
+        /*
+         * Standby should always be exactly one attempt ahead
+         * whenever it exists.
+         */
+        if (
+            active != null
+                && standby != null
+                && standby.attemptNumber()
+                    != active.attemptNumber()
+                        + 1
+        ) {
+            warnings.add(
+                "STANDBY #"
+                    + standby.attemptNumber()
+                    + " should be #"
+                    + (
+                        active.attemptNumber()
+                            + 1
+                    )
+                    + "."
+            );
+        }
+
+        if (
+            runManager.isActive()
+                && standby == null
+        ) {
+            warnings.add(
+                "No STANDBY WorldSet while run is ACTIVE."
+            );
+        }
+
+        /*
+         * Persistent state must agree with loaded state.
+         */
+        if (
+            persistentState != null
+                && active != null
+                && persistentState
+                    .activeAttempt()
+                    != active
+                        .attemptNumber()
+        ) {
+            warnings.add(
+                "Persistent ACTIVE #"
+                    + persistentState
+                        .activeAttempt()
+                    + " != loaded ACTIVE #"
+                    + active
+                        .attemptNumber()
+                    + "."
+            );
+        }
+
+        if (
+            persistentState != null
+                && standby != null
+                && persistentState
+                    .standbyAttempt()
+                    != standby
+                        .attemptNumber()
+        ) {
+            warnings.add(
+                "Persistent STANDBY #"
+                    + persistentState
+                        .standbyAttempt()
+                    + " != loaded STANDBY #"
+                    + standby
+                        .attemptNumber()
+                    + "."
+            );
+        }
+
+        /*
+         * STABLE is expected during normal ACTIVE gameplay.
+         *
+         * ROTATING is legitimate only during the reset pipeline.
+         */
+        if (
+            persistentState != null
+                && runManager.isActive()
+                && persistentState.phase()
+                    != WorldRotationPhase.STABLE
+        ) {
+            warnings.add(
+                "Persistent phase is "
+                    + persistentState
+                        .phase()
+                        .name()
+                    + " while run is ACTIVE."
+            );
+        }
+
+        int onlinePlayers =
+            Bukkit.getOnlinePlayers()
+                .size();
+
+        int activePlayers =
+            (int) Bukkit
+                .getOnlinePlayers()
+                .stream()
+                .filter(
+                    player ->
+                        worldSetManager
+                            .isActiveWorld(
+                                player.getWorld()
+                            )
+                )
+                .count();
+
+        int participants =
+            participantManager
+                .getParticipantCount(
+                    statsAttempt
+                );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            divider()
+        );
+
+        sender.sendMessage(
+            brand()
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "DEBUG STATUS",
+                NamedTextColor.RED
+            )
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sendStatusEntry(
+            sender,
+            "Run State",
+            runManager
+                .getState()
+                .name(),
+            runManager.isActive()
+                ? NamedTextColor.GREEN
+                : NamedTextColor.YELLOW
+        );
+
+        sendStatusEntry(
+            sender,
+            "Persistent Phase",
+            persistentState == null
+                ? "ERROR"
+                : persistentState
+                    .phase()
+                    .name(),
+            persistentState == null
+                ? NamedTextColor.RED
+                : persistentState.phase()
+                    == WorldRotationPhase.STABLE
+                        ? NamedTextColor.GREEN
+                        : NamedTextColor.YELLOW
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sendStatusEntry(
+            sender,
+            "Stats Attempt",
+            "#"
+                + statsAttempt,
+            NamedTextColor.WHITE
+        );
+
+        sendStatusEntry(
+            sender,
+            "Active Attempt",
+            active == null
+                ? "None"
+                : "#"
+                    + active
+                        .attemptNumber(),
+            active == null
+                ? NamedTextColor.RED
+                : NamedTextColor.WHITE
+        );
+
+        sendStatusEntry(
+            sender,
+            "Standby Attempt",
+            standby == null
+                ? "None"
+                : "#"
+                    + standby
+                        .attemptNumber(),
+            standby == null
+                ? NamedTextColor.YELLOW
+                : NamedTextColor.WHITE
+        );
+
+        sendStatusEntry(
+            sender,
+            "Retired Attempt",
+            retired == null
+                ? "None"
+                : "#"
+                    + retired
+                        .attemptNumber(),
+            retired == null
+                ? NamedTextColor.GRAY
+                : NamedTextColor.YELLOW
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sendStatusEntry(
+            sender,
+            "Countdown",
+            countdownManager
+                .isRunning()
+                ? "Running"
+                : "Idle",
+            countdownManager
+                .isRunning()
+                ? NamedTextColor.YELLOW
+                : NamedTextColor.GRAY
+        );
+
+        sendStatusEntry(
+            sender,
+            "Rotation",
+            worldRotationManager
+                .isRotationInProgress()
+                ? "Running"
+                : "Idle",
+            worldRotationManager
+                .isRotationInProgress()
+                ? NamedTextColor.YELLOW
+                : NamedTextColor.GRAY
+        );
+
+        sendStatusEntry(
+            sender,
+            "Cleanup",
+            worldCleanupManager
+                .isCleanupInProgress()
+                ? "Running"
+                : "Idle",
+            worldCleanupManager
+                .isCleanupInProgress()
+                ? NamedTextColor.YELLOW
+                : NamedTextColor.GRAY
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sendStatusEntry(
+            sender,
+            "Players Online",
+            Integer.toString(
+                onlinePlayers
+            ),
+            NamedTextColor.WHITE
+        );
+
+        sendStatusEntry(
+            sender,
+            "Players In ACTIVE",
+            Integer.toString(
+                activePlayers
+            ),
+            NamedTextColor.WHITE
+        );
+
+        sendStatusEntry(
+            sender,
+            "Attempt Participants",
+            Integer.toString(
+                participants
+            ),
+            NamedTextColor.WHITE
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        if (warnings.isEmpty()) {
+            sendStatusEntry(
+                sender,
+                "Integrity",
+                "OK",
+                NamedTextColor.GREEN
+            );
+        } else {
+            sendStatusEntry(
+                sender,
+                "Integrity",
+                "WARNING",
+                NamedTextColor.RED
+            );
+
+            for (
+                String warning :
+                warnings
+            ) {
+                sender.sendMessage(
+                    Component.text(
+                        "- "
+                            + warning,
+                        NamedTextColor.RED
+                    )
+                );
+            }
+        }
+
+        sender.sendMessage(
+            divider()
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+    }
+
+    /*
+     * ------------------------------------------------------------
      * HELP
      * ------------------------------------------------------------
      */
@@ -1398,12 +1978,7 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            Component.text(
-                "INSTIGATE CAFE HARDCORE",
-                NamedTextColor.GOLD
-            ).decorate(
-                TextDecoration.BOLD
-            )
+            brand()
         );
 
         sender.sendMessage(
@@ -1512,7 +2087,7 @@ public final class HardcoreCommand
 
     /*
      * ------------------------------------------------------------
-     * FORMATTERS / COMMON MESSAGES
+     * COMMON FORMATTERS
      * ------------------------------------------------------------
      */
 
@@ -1577,7 +2152,7 @@ public final class HardcoreCommand
         }
 
         long minutes =
-            seconds / 60;
+            seconds / 60L;
 
         if (minutes < 60) {
             return minutes
@@ -1585,7 +2160,7 @@ public final class HardcoreCommand
         }
 
         long hours =
-            minutes / 60;
+            minutes / 60L;
 
         if (hours < 24) {
             return hours
@@ -1593,7 +2168,7 @@ public final class HardcoreCommand
         }
 
         long days =
-            hours / 24;
+            hours / 24L;
 
         return days
             + "d ago";
@@ -1609,15 +2184,15 @@ public final class HardcoreCommand
             );
 
         long hours =
-            totalSeconds / 3600;
+            totalSeconds / 3600L;
 
         long minutes =
             (
-                totalSeconds % 3600
-            ) / 60;
+                totalSeconds % 3600L
+            ) / 60L;
 
         long seconds =
-            totalSeconds % 60;
+            totalSeconds % 60L;
 
         return String.format(
             "%02d:%02d:%02d",
@@ -1710,29 +2285,6 @@ public final class HardcoreCommand
         );
     }
 
-    private void sendNotImplemented(
-        CommandSender sender,
-        String subcommand
-    ) {
-        sender.sendMessage(
-            Component.text()
-                .append(
-                    Component.text(
-                        "/hc "
-                            + subcommand,
-                        NamedTextColor.GOLD
-                    )
-                )
-                .append(
-                    Component.text(
-                        " is not available yet.",
-                        NamedTextColor.GRAY
-                    )
-                )
-                .build()
-        );
-    }
-
     private void sendNoPermission(
         CommandSender sender
     ) {
@@ -1741,6 +2293,15 @@ public final class HardcoreCommand
                 "You do not have permission to use that command.",
                 NamedTextColor.RED
             )
+        );
+    }
+
+    private Component brand() {
+        return Component.text(
+            "INSTIGATE CAFE HARDCORE",
+            NamedTextColor.GOLD
+        ).decorate(
+            TextDecoration.BOLD
         );
     }
 

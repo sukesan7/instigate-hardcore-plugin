@@ -70,12 +70,6 @@ public final class InstigateHardcore extends JavaPlugin {
     private WorldCleanupManager worldCleanupManager;
     private WorldRotationManager worldRotationManager;
 
-    /*
-     * Shared attempt-ending service used by both:
-     *
-     * - PlayerDeathEvent
-     * - /hc reset
-     */
     private AttemptEndManager attemptEndManager;
 
     private BukkitTask telemetryCheckpointTask;
@@ -85,36 +79,36 @@ public final class InstigateHardcore extends JavaPlugin {
         saveDefaultConfig();
 
         /*
-         * Critical campaign persistence.
+         * Persistent campaign statistics.
          */
         if (!initializeStats()) {
             return;
         }
 
         /*
-         * Phase 6 world recovery.
+         * Crash-safe Phase 6 world recovery.
          */
         if (!initializeWorldSets()) {
             return;
         }
 
         /*
-         * Attempt-specific participation history.
+         * Per-attempt participation history.
          */
         if (!initializeParticipants()) {
             return;
         }
 
         /*
-         * Rich player playtime/death telemetry.
+         * Player playtime and structured death history.
          */
         if (!initializeTelemetry()) {
             return;
         }
 
         /*
-         * Runtime state becomes ACTIVE only after persistent state
-         * has initialized successfully.
+         * Runtime state becomes ACTIVE only after persistent
+         * campaign state has initialized successfully.
          */
         runManager =
             new RunManager();
@@ -141,8 +135,7 @@ public final class InstigateHardcore extends JavaPlugin {
         initializeWorldRotation();
 
         /*
-         * Must initialize after WorldRotationManager because
-         * AttemptEndManager ultimately invokes world rotation.
+         * Shared death/admin reset pipeline.
          */
         initializeAttemptEnding();
 
@@ -181,7 +174,7 @@ public final class InstigateHardcore extends JavaPlugin {
         }
 
         /*
-         * Commit all live playtime before normal shutdown.
+         * Commit active playtime before normal shutdown.
          */
         if (telemetryManager != null) {
             try {
@@ -236,7 +229,7 @@ public final class InstigateHardcore extends JavaPlugin {
 
     /*
      * ------------------------------------------------------------
-     * PERSISTENT STATS
+     * STATS
      * ------------------------------------------------------------
      */
 
@@ -274,7 +267,7 @@ public final class InstigateHardcore extends JavaPlugin {
 
     /*
      * ------------------------------------------------------------
-     * WORLD RECOVERY / WORLD SETS
+     * WORLD RECOVERY
      * ------------------------------------------------------------
      */
 
@@ -513,7 +506,7 @@ public final class InstigateHardcore extends JavaPlugin {
 
     /*
      * ------------------------------------------------------------
-     * GAMEPLAY SYSTEMS
+     * GAMEPLAY SERVICES
      * ------------------------------------------------------------
      */
 
@@ -613,11 +606,6 @@ public final class InstigateHardcore extends JavaPlugin {
             );
     }
 
-    /**
-     * Shared authoritative attempt-ending pipeline.
-     *
-     * Both player death and administrative reset use this.
-     */
     private void initializeAttemptEnding() {
         attemptEndManager =
             new AttemptEndManager(
@@ -638,11 +626,6 @@ public final class InstigateHardcore extends JavaPlugin {
      */
 
     private void registerListeners() {
-        /*
-         * DeathListener only detects/suppresses the actual death.
-         *
-         * AttemptEndManager owns progression afterward.
-         */
         getServer()
             .getPluginManager()
             .registerEvents(
@@ -713,6 +696,17 @@ public final class InstigateHardcore extends JavaPlugin {
             return false;
         }
 
+        /*
+         * Phase 7D:
+         *
+         * /hc status
+         * /hc stats
+         * /hc stats <player>
+         * /hc deaths
+         * /hc reset
+         * /hc worlds
+         * /hc debug
+         */
         HardcoreCommand executor =
             new HardcoreCommand(
                 runManager,
@@ -722,6 +716,8 @@ public final class InstigateHardcore extends JavaPlugin {
                 worldSetManager,
                 worldRotationManager,
                 worldCleanupManager,
+                countdownManager,
+                worldStateStore,
                 attemptEndManager
             );
 
@@ -747,7 +743,7 @@ public final class InstigateHardcore extends JavaPlugin {
 
     /*
      * ------------------------------------------------------------
-     * ALREADY-ONLINE PLAYERS
+     * EXISTING PLAYERS
      * ------------------------------------------------------------
      */
 
@@ -909,6 +905,10 @@ public final class InstigateHardcore extends JavaPlugin {
 
         getLogger().info(
             "Shared attempt-ending pipeline enabled."
+        );
+
+        getLogger().info(
+            "World diagnostics enabled."
         );
 
         getLogger().info(
