@@ -86,7 +86,7 @@ public final class InstigateHardcore extends JavaPlugin {
         }
 
         /*
-         * Crash-safe Phase 6 world recovery.
+         * Crash-safe world recovery.
          */
         if (!initializeWorldSets()) {
             return;
@@ -626,6 +626,22 @@ public final class InstigateHardcore extends JavaPlugin {
      */
 
     private void registerListeners() {
+        boolean allowLateJoiners =
+            getConfig()
+                .getBoolean(
+                    "players.allow-late-joiners",
+                    true
+                );
+
+        getLogger().info(
+            "[Instigate Cafe] Late joining is "
+                + (
+                    allowLateJoiners
+                        ? "enabled."
+                        : "disabled."
+                )
+        );
+
         getServer()
             .getPluginManager()
             .registerEvents(
@@ -658,7 +674,8 @@ public final class InstigateHardcore extends JavaPlugin {
                     playerResetManager,
                     worldSetManager,
                     participantManager,
-                    telemetryManager
+                    telemetryManager,
+                    allowLateJoiners
                 ),
                 this
             );
@@ -696,17 +713,6 @@ public final class InstigateHardcore extends JavaPlugin {
             return false;
         }
 
-        /*
-         * Phase 7D:
-         *
-         * /hc status
-         * /hc stats
-         * /hc stats <player>
-         * /hc deaths
-         * /hc reset
-         * /hc worlds
-         * /hc debug
-         */
         HardcoreCommand executor =
             new HardcoreCommand(
                 runManager,
