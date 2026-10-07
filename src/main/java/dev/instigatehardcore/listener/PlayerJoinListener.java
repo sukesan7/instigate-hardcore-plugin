@@ -1,34 +1,63 @@
 package dev.instigatehardcore.listener;
 
 import dev.instigatehardcore.core.RunManager;
+
 import dev.instigatehardcore.participation.AttemptParticipantManager;
+
 import dev.instigatehardcore.player.PlayerResetManager;
+
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
+
 import dev.instigatehardcore.stats.StatsManager;
+
 import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
+
 import dev.instigatehardcore.ui.InstigateTheme;
+
+import dev.instigatehardcore.world.WorldSet;
 import dev.instigatehardcore.world.WorldSetManager;
 
 import net.kyori.adventure.text.Component;
 
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+
 import org.bukkit.entity.Player;
+
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+
 import org.bukkit.event.player.PlayerJoinEvent;
+
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
+
 import java.util.Objects;
 
 public final class PlayerJoinListener implements Listener {
 
-    private static final long JOIN_PLACEMENT_DELAY_TICKS =
-        1L;
+    /*
+     * Give Paper a short window to finish restoring the player's
+     * saved world, location and gamemode before we enforce the
+     * campaign state.
+     */
+    private static final long INITIAL_JOIN_DELAY_TICKS =
+        5L;
 
-    private static final long JOIN_VERIFICATION_DELAY_TICKS =
-        2L;
+    /*
+     * After placing a player into the ACTIVE attempt, verify the
+     * result repeatedly for a short period.
+     *
+     * This protects against Paper or another login-stage operation
+     * restoring stale spectator/location state after our first
+     * placement.
+     */
+    private static final long VERIFICATION_DELAY_TICKS =
+        10L;
+
+    private static final int MAX_VERIFICATION_ATTEMPTS =
+        4;
 
     private final JavaPlugin plugin;
 
@@ -102,6 +131,12 @@ public final class PlayerJoinListener implements Listener {
             allowLateJoiners;
     }
 
+    /*
+     * ------------------------------------------------------------
+     * JOIN
+     * ------------------------------------------------------------
+     */
+
     @EventHandler
     public void onPlayerJoin(
         PlayerJoinEvent event
@@ -122,8 +157,10 @@ public final class PlayerJoinListener implements Listener {
         }
 
         /*
-         * Wait for Paper to finish restoring the player's saved
-         * location and gamemode before enforcing campaign state.
+         * Do not immediately fight Paper's login restoration.
+         *
+         * Wait a few ticks, then make the hardcore campaign state
+         * authoritative.
          */
         plugin.getServer()
             .getScheduler()
@@ -132,7 +169,7 @@ public final class PlayerJoinListener implements Listener {
                 () -> placePlayer(
                     player
                 ),
-                JOIN_PLACEMENT_DELAY_TICKS
+                INITIAL_JOIN_DELAY_TICKS
             );
     }
 
@@ -157,6 +194,12 @@ public final class PlayerJoinListener implements Listener {
         }
     }
 
+    /*
+     * ------------------------------------------------------------
+     * CAMPAIGN PLACEMENT
+     * ------------------------------------------------------------
+     */
+
     private void placePlayer(
         Player player
     ) {
@@ -164,33 +207,38 @@ public final class PlayerJoinListener implements Listener {
             return;
         }
 
-        if (runManager.isActive()) {
-            placeIntoActiveAttempt(
+        /*
+         * ENDING and RESETTING are not joinable gameplay states.
+         */
+        if (!runManager.isActive()) {
+            sendToSafetyLobby(
                 player
             );
 
             return;
         }
 
-        /*
-         * Players joining during ENDING or RESETTING must remain
-         * outside active gameplay.
-         */
-        sendToSafetyLobby(
-            player
-        );
-    }
+        int attempt =
+            statsManager
+                .getCurrentAttempt();
 
-    private void placeIntoActiveAttempt(
-        Player player
-    ) {
+        boolean existingParticipant =
+            participantManager
+                .hasParticipant(
+                    attempt,
+                    player.getUniqueId()
+                );
+
         if (
             !mayEnterCurrentAttempt(
-                player
+                attempt,
+                player,
+                existingParticipant
             )
         ) {
             notifyLateJoinBlocked(
-                player
+                player,
+                attempt
             );
 
             sendToSafetyLobby(
@@ -200,51 +248,381 @@ public final class PlayerJoinListener implements Listener {
             return;
         }
 
-        Location activeSpawn =
-            worldSetManager
-                .getActiveWorldSet()
-                .getSpawnLocation();
+        /*
+         * A brand-new participant receives the full clean-entry
+         * reset once.
+         *
+         * Someone reconnecting to an attempt they already played
+         * must NOT have their inventory wiped.
+         */
+        boolean needsFreshReset =
+            !existingParticipant;
+
+        enforceActivePlacement(
+            player,
+            attempt,
+            needsFreshReset,
+            0
+        );
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * ACTIVE PLACEMENT
+     * ------------------------------------------------------------
+     */
+
+    private void enforceActivePlacement(
+        Player player,
+        int expectedAttempt,
+        boolean needsFreshReset,
+        int verificationAttempt
+    ) {
+        if (!player.isOnline()) {
+            return;
+        }
 
         /*
-         * The player was restored into the lobby, an old attempt,
-         * or another stale world.
+         * The attempt may have ended while this delayed task was
+         * waiting.
+         */
+        if (!runManager.isActive()) {
+            sendToSafetyLobby(
+                player
+            );
+
+            return;
+        }
+
+        int currentAttempt =
+            statsManager
+                .getCurrentAttempt();
+
+        /*
+         * If rotation completed while we were verifying login,
+         * evaluate the player against the newly-active attempt
+         * instead of forcing them back into an obsolete one.
          */
         if (
-            !worldSetManager.isActiveWorld(
-                player.getWorld()
+            currentAttempt
+                != expectedAttempt
+        ) {
+            placePlayer(
+                player
+            );
+
+            return;
+        }
+
+        WorldSet activeWorldSet =
+            worldSetManager
+                .getActiveWorldSet();
+
+        if (activeWorldSet == null) {
+            plugin.getLogger().severe(
+                "[Instigate Cafe] "
+                    + "Unable to place "
+                    + player.getName()
+                    + " into attempt #"
+                    + expectedAttempt
+                    + " because the ACTIVE WorldSet is missing."
+            );
+
+            sendToSafetyLobby(
+                player
+            );
+
+            return;
+        }
+
+        boolean inActiveWorld =
+            worldSetManager
+                .isActiveWorld(
+                    player.getWorld()
+                );
+
+        if (!inActiveWorld) {
+            boolean moved =
+                moveIntoActiveAttempt(
+                    player,
+                    activeWorldSet,
+                    needsFreshReset
+                );
+
+            if (!moved) {
+                scheduleVerificationOrFail(
+                    player,
+                    expectedAttempt,
+                    needsFreshReset,
+                    verificationAttempt
+                );
+
+                return;
+            }
+
+            /*
+             * The full reset must only happen once.
+             *
+             * Any later corrective teleport during verification
+             * must preserve the player's newly-started attempt
+             * state.
+             */
+            needsFreshReset =
+                false;
+        }
+
+        /*
+         * If placement succeeded, establish all four conditions
+         * required for a valid participant:
+         *
+         * - inside ACTIVE WorldSet
+         * - Survival
+         * - persistent participation
+         * - active telemetry session
+         */
+        if (
+            isActiveParticipantLocation(
+                player,
+                expectedAttempt
             )
         ) {
-            try {
+            normalizeActivePlayer(
+                player
+            );
+
+            recordParticipation(
+                player,
+                expectedAttempt
+            );
+
+            beginTelemetrySession(
+                player,
+                expectedAttempt
+            );
+        }
+
+        /*
+         * Even after a successful first placement, verify it again.
+         *
+         * This is the important Phase 8B change: we no longer
+         * assume the first teleport/gamemode assignment survives
+         * the rest of Paper's login restoration.
+         */
+        if (
+            verificationAttempt
+                < MAX_VERIFICATION_ATTEMPTS
+        ) {
+            scheduleVerification(
+                player,
+                expectedAttempt,
+                needsFreshReset,
+                verificationAttempt
+                    + 1
+            );
+        }
+    }
+
+    private boolean moveIntoActiveAttempt(
+        Player player,
+        WorldSet activeWorldSet,
+        boolean needsFreshReset
+    ) {
+        Location activeSpawn =
+            activeWorldSet
+                .getSpawnLocation();
+
+        try {
+            if (needsFreshReset) {
+                /*
+                 * First entry into this attempt:
+                 *
+                 * clear state + teleport using the same reset path
+                 * used when a new attempt begins.
+                 */
                 playerResetManager
                     .prepareForNewAttempt(
                         player,
                         activeSpawn
                     );
-
-                recordParticipation(
-                    player
+            } else {
+                /*
+                 * Existing participant or corrective retry:
+                 *
+                 * preserve inventory and gameplay state.
+                 */
+                player.setSpectatorTarget(
+                    null
                 );
 
-                beginTelemetrySession(
-                    player
+                boolean teleported =
+                    player.teleport(
+                        activeSpawn
+                    );
+
+                if (!teleported) {
+                    plugin.getLogger().warning(
+                        "[Instigate Cafe] "
+                            + "Corrective ACTIVE teleport failed for "
+                            + player.getName()
+                            + "."
+                    );
+
+                    return false;
+                }
+
+                player.setGameMode(
+                    GameMode.SURVIVAL
+                );
+            }
+
+            return worldSetManager
+                .isActiveWorld(
+                    player.getWorld()
+                );
+        } catch (
+            RuntimeException exception
+        ) {
+            plugin.getLogger().severe(
+                "[Instigate Cafe] "
+                    + "Failed to move "
+                    + player.getName()
+                    + " into the ACTIVE attempt."
+            );
+
+            exception.printStackTrace();
+
+            return false;
+        }
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * VERIFICATION
+     * ------------------------------------------------------------
+     */
+
+    private void scheduleVerification(
+        Player player,
+        int expectedAttempt,
+        boolean needsFreshReset,
+        int verificationAttempt
+    ) {
+        plugin.getServer()
+            .getScheduler()
+            .runTaskLater(
+                plugin,
+                () ->
+                    verifyActivePlacement(
+                        player,
+                        expectedAttempt,
+                        needsFreshReset,
+                        verificationAttempt
+                    ),
+                VERIFICATION_DELAY_TICKS
+            );
+    }
+
+    private void verifyActivePlacement(
+        Player player,
+        int expectedAttempt,
+        boolean needsFreshReset,
+        int verificationAttempt
+    ) {
+        if (!player.isOnline()) {
+            return;
+        }
+
+        if (!runManager.isActive()) {
+            sendToSafetyLobby(
+                player
+            );
+
+            return;
+        }
+
+        int currentAttempt =
+            statsManager
+                .getCurrentAttempt();
+
+        if (
+            currentAttempt
+                != expectedAttempt
+        ) {
+            /*
+             * A world rotation occurred while we were checking.
+             * Re-enter the normal placement path for the new run.
+             */
+            placePlayer(
+                player
+            );
+
+            return;
+        }
+
+        boolean existingParticipant =
+            participantManager
+                .hasParticipant(
+                    expectedAttempt,
+                    player.getUniqueId()
                 );
 
-                scheduleActiveStateVerification(
-                    player
-                );
-            } catch (
-                RuntimeException exception
+        /*
+         * If late joining was disabled after this player was
+         * admitted, an already-recorded participant still has the
+         * right to re-enter.
+         */
+        if (
+            !mayEnterCurrentAttempt(
+                expectedAttempt,
+                player,
+                existingParticipant
+            )
+        ) {
+            sendToSafetyLobby(
+                player
+            );
+
+            return;
+        }
+
+        boolean valid =
+            isActiveParticipantLocation(
+                player,
+                expectedAttempt
+            );
+
+        if (valid) {
+            normalizeActivePlayer(
+                player
+            );
+
+            recordParticipation(
+                player,
+                expectedAttempt
+            );
+
+            beginTelemetrySession(
+                player,
+                expectedAttempt
+            );
+
+            /*
+             * We intentionally continue verification until the
+             * short verification window has finished.
+             *
+             * If Paper changes the player's location or gamemode
+             * after this tick, a later pass will repair it.
+             */
+            if (
+                verificationAttempt
+                    < MAX_VERIFICATION_ATTEMPTS
             ) {
-                plugin.getLogger().severe(
-                    "Failed to move "
-                        + player.getName()
-                        + " into the active hardcore attempt."
-                );
-
-                exception.printStackTrace();
-
-                sendToSafetyLobby(
-                    player
+                scheduleVerification(
+                    player,
+                    expectedAttempt,
+                    false,
+                    verificationAttempt
+                        + 1
                 );
             }
 
@@ -252,25 +630,65 @@ public final class PlayerJoinListener implements Listener {
         }
 
         /*
-         * The player is already inside the current ACTIVE attempt.
+         * Something restored the player outside ACTIVE.
+         * Correct it.
          *
-         * Preserve inventory/location while correcting any stale
-         * spectator state left by crash recovery.
+         * If the player has already been recorded as a participant,
+         * never wipe them again.
          */
-        normalizeActivePlayer(
-            player
-        );
+        boolean shouldFreshReset =
+            needsFreshReset
+                && !existingParticipant;
 
-        recordParticipation(
-            player
+        enforceActivePlacement(
+            player,
+            expectedAttempt,
+            shouldFreshReset,
+            verificationAttempt
         );
+    }
 
-        beginTelemetrySession(
-            player
-        );
+    private void scheduleVerificationOrFail(
+        Player player,
+        int expectedAttempt,
+        boolean needsFreshReset,
+        int verificationAttempt
+    ) {
+        if (
+            verificationAttempt
+                >= MAX_VERIFICATION_ATTEMPTS
+        ) {
+            plugin.getLogger().severe(
+                "[Instigate Cafe] "
+                    + "Unable to establish ACTIVE placement for "
+                    + player.getName()
+                    + " after "
+                    + MAX_VERIFICATION_ATTEMPTS
+                    + " verification attempts."
+            );
 
-        scheduleActiveStateVerification(
-            player
+            player.sendMessage(
+                InstigateTheme.chat(
+                    InstigateTheme.error(
+                        "Unable to place you into the current attempt. "
+                            + "You were moved to the safety lobby."
+                    )
+                )
+            );
+
+            sendToSafetyLobby(
+                player
+            );
+
+            return;
+        }
+
+        scheduleVerification(
+            player,
+            expectedAttempt,
+            needsFreshReset,
+            verificationAttempt
+                + 1
         );
     }
 
@@ -281,48 +699,30 @@ public final class PlayerJoinListener implements Listener {
      */
 
     private boolean mayEnterCurrentAttempt(
-        Player player
+        int attempt,
+        Player player,
+        boolean existingParticipant
     ) {
-        int attempt =
-            statsManager
-                .getCurrentAttempt();
-
         /*
-         * Rejoining an attempt you already participated in is
-         * never considered a late join.
-         *
-         * A participant may disconnect and reconnect freely even
-         * when late joining is disabled.
+         * Rejoining your own attempt is never a late join.
          */
-        if (
-            participantManager
-                .hasParticipant(
-                    attempt,
-                    player.getUniqueId()
-                )
-        ) {
+        if (existingParticipant) {
             return true;
         }
 
         /*
-         * Normal Instigate Cafe behavior:
-         *
-         * new players may enter an already-running attempt.
+         * New participants are allowed when configured.
          */
         if (allowLateJoiners) {
             return true;
         }
 
         /*
-         * Bootstrap protection for a completely empty attempt.
+         * Bootstrap protection.
          *
-         * Without this exception, a fresh server with late joining
-         * disabled could start with zero participants and therefore
-         * reject every player forever.
-         *
-         * The first player establishes participation. Once the
-         * attempt has a participant, additional new players must
-         * wait for the next attempt.
+         * A completely empty ACTIVE attempt must allow its first
+         * participant or a fresh server could deadlock with every
+         * player stuck in the lobby.
          */
         return participantManager
             .getParticipantCount(
@@ -332,12 +732,9 @@ public final class PlayerJoinListener implements Listener {
     }
 
     private void notifyLateJoinBlocked(
-        Player player
+        Player player,
+        int attempt
     ) {
-        int attempt =
-            statsManager
-                .getCurrentAttempt();
-
         player.sendMessage(
             InstigateTheme.chat(
                 Component.text()
@@ -376,11 +773,13 @@ public final class PlayerJoinListener implements Listener {
      */
 
     private void recordParticipation(
-        Player player
+        Player player,
+        int attempt
     ) {
         if (
             !isActiveParticipantLocation(
-                player
+                player,
+                attempt
             )
         ) {
             return;
@@ -390,8 +789,7 @@ public final class PlayerJoinListener implements Listener {
             boolean firstParticipation =
                 participantManager
                     .recordParticipant(
-                        statsManager
-                            .getCurrentAttempt(),
+                        attempt,
                         player.getUniqueId(),
                         player.getName()
                     );
@@ -401,8 +799,7 @@ public final class PlayerJoinListener implements Listener {
                     "[Instigate Cafe] "
                         + player.getName()
                         + " joined attempt #"
-                        + statsManager
-                            .getCurrentAttempt()
+                        + attempt
                         + " as a participant."
                 );
             }
@@ -419,52 +816,73 @@ public final class PlayerJoinListener implements Listener {
         }
     }
 
-    /**
-     * Starts actual ACTIVE-attempt playtime accounting.
-     *
-     * PlayerTelemetryManager.beginSession() is idempotent for an
-     * already-running session in the same attempt.
+    /*
+     * ------------------------------------------------------------
+     * TELEMETRY
+     * ------------------------------------------------------------
      */
+
     private void beginTelemetrySession(
-        Player player
+        Player player,
+        int attempt
     ) {
         if (
             !isActiveParticipantLocation(
-                player
+                player,
+                attempt
             )
         ) {
             return;
         }
 
         telemetryManager.beginSession(
-            statsManager
-                .getCurrentAttempt(),
+            attempt,
             player.getUniqueId(),
             player.getName()
         );
     }
 
+    /*
+     * ------------------------------------------------------------
+     * ACTIVE STATE
+     * ------------------------------------------------------------
+     */
+
     private boolean isActiveParticipantLocation(
-        Player player
+        Player player,
+        int expectedAttempt
     ) {
-        return player.isOnline()
-            && runManager.isActive()
-            && worldSetManager.isActiveWorld(
-                player.getWorld()
-            );
+        if (
+            !player.isOnline()
+                || !runManager.isActive()
+        ) {
+            return false;
+        }
+
+        if (
+            statsManager
+                .getCurrentAttempt()
+                != expectedAttempt
+        ) {
+            return false;
+        }
+
+        WorldSet active =
+            worldSetManager
+                .getActiveWorldSet();
+
+        return active != null
+            && active.attemptNumber()
+                == expectedAttempt
+            && worldSetManager
+                .isActiveWorld(
+                    player.getWorld()
+                );
     }
 
     private void normalizeActivePlayer(
         Player player
     ) {
-        if (
-            !isActiveParticipantLocation(
-                player
-            )
-        ) {
-            return;
-        }
-
         player.setSpectatorTarget(
             null
         );
@@ -486,47 +904,6 @@ public final class PlayerJoinListener implements Listener {
         }
     }
 
-    /**
-     * Paper can apply additional player state shortly after the
-     * join event. Verify once more after login restoration.
-     *
-     * Phase 8B will strengthen this verification path further.
-     */
-    private void scheduleActiveStateVerification(
-        Player player
-    ) {
-        plugin.getServer()
-            .getScheduler()
-            .runTaskLater(
-                plugin,
-                () -> {
-                    if (
-                        !isActiveParticipantLocation(
-                            player
-                        )
-                    ) {
-                        return;
-                    }
-
-                    normalizeActivePlayer(
-                        player
-                    );
-
-                    /*
-                     * Both operations are idempotent.
-                     */
-                    recordParticipation(
-                        player
-                    );
-
-                    beginTelemetrySession(
-                        player
-                    );
-                },
-                JOIN_VERIFICATION_DELAY_TICKS
-            );
-    }
-
     /*
      * ------------------------------------------------------------
      * SAFETY LOBBY
@@ -536,9 +913,13 @@ public final class PlayerJoinListener implements Listener {
     private void sendToSafetyLobby(
         Player player
     ) {
+        if (!player.isOnline()) {
+            return;
+        }
+
         /*
-         * A player being moved out of gameplay should not retain
-         * an ACTIVE telemetry session.
+         * A player outside ACTIVE gameplay must not retain an
+         * ACTIVE telemetry session.
          */
         try {
             telemetryManager.endSession(
@@ -595,6 +976,10 @@ public final class PlayerJoinListener implements Listener {
 
                         return;
                     }
+
+                    player.setSpectatorTarget(
+                        null
+                    );
 
                     player.setGameMode(
                         GameMode.SPECTATOR
