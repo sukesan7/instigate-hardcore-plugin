@@ -3,7 +3,9 @@ package dev.instigatehardcore;
 import dev.instigatehardcore.command.HardcoreCommand;
 import dev.instigatehardcore.command.HardcoreTabCompleter;
 
+import dev.instigatehardcore.core.AttemptEndManager;
 import dev.instigatehardcore.core.RunManager;
+
 import dev.instigatehardcore.countdown.CountdownManager;
 
 import dev.instigatehardcore.listener.DeathListener;
@@ -14,7 +16,9 @@ import dev.instigatehardcore.listener.PortalRoutingListener;
 import dev.instigatehardcore.participation.AttemptParticipantManager;
 
 import dev.instigatehardcore.player.PlayerResetManager;
+
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
+
 import dev.instigatehardcore.stats.StatsManager;
 
 import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
@@ -44,19 +48,13 @@ public final class InstigateHardcore extends JavaPlugin {
     private static final int DEFAULT_PRELOAD_RADIUS_CHUNKS =
         1;
 
-    /*
-     * Live player telemetry is checkpointed every minute.
-     *
-     * Normal shutdown commits everything immediately.
-     * A hard process crash should therefore lose at most roughly
-     * one checkpoint interval of playtime.
-     */
     private static final long TELEMETRY_CHECKPOINT_INTERVAL_TICKS =
         20L * 60L;
 
     private RunManager runManager;
 
     private StatsManager statsManager;
+
     private AttemptParticipantManager participantManager;
     private PlayerTelemetryManager telemetryManager;
 
@@ -72,6 +70,14 @@ public final class InstigateHardcore extends JavaPlugin {
     private WorldCleanupManager worldCleanupManager;
     private WorldRotationManager worldRotationManager;
 
+    /*
+     * Shared attempt-ending service used by both:
+     *
+     * - PlayerDeathEvent
+     * - /hc reset
+     */
+    private AttemptEndManager attemptEndManager;
+
     private BukkitTask telemetryCheckpointTask;
 
     @Override
@@ -79,39 +85,36 @@ public final class InstigateHardcore extends JavaPlugin {
         saveDefaultConfig();
 
         /*
-         * Persistent campaign statistics must initialize first
-         * because Phase 6 recovery depends on the attempt number.
+         * Critical campaign persistence.
          */
         if (!initializeStats()) {
             return;
         }
 
         /*
-         * Recover the authoritative ACTIVE/STANDBY world state.
+         * Phase 6 world recovery.
          */
         if (!initializeWorldSets()) {
             return;
         }
 
         /*
-         * Attempt participation is initialized after recovery
-         * because recovery may advance the current attempt.
+         * Attempt-specific participation history.
          */
         if (!initializeParticipants()) {
             return;
         }
 
         /*
-         * Rich player telemetry is independent from critical
-         * StatsManager campaign persistence.
+         * Rich player playtime/death telemetry.
          */
         if (!initializeTelemetry()) {
             return;
         }
 
         /*
-         * Runtime state only becomes ACTIVE after all persistent
-         * campaign state has initialized successfully.
+         * Runtime state becomes ACTIVE only after persistent state
+         * has initialized successfully.
          */
         runManager =
             new RunManager();
@@ -133,8 +136,15 @@ public final class InstigateHardcore extends JavaPlugin {
 
         initializeCountdown();
         initializeScoreboard();
+
         initializeWorldCleanup();
         initializeWorldRotation();
+
+        /*
+         * Must initialize after WorldRotationManager because
+         * AttemptEndManager ultimately invokes world rotation.
+         */
+        initializeAttemptEnding();
 
         registerListeners();
 
@@ -171,8 +181,7 @@ public final class InstigateHardcore extends JavaPlugin {
         }
 
         /*
-         * Commit any currently running playtime sessions before
-         * the server exits.
+         * Commit all live playtime before normal shutdown.
          */
         if (telemetryManager != null) {
             try {
@@ -225,6 +234,12 @@ public final class InstigateHardcore extends JavaPlugin {
         );
     }
 
+    /*
+     * ------------------------------------------------------------
+     * PERSISTENT STATS
+     * ------------------------------------------------------------
+     */
+
     private boolean initializeStats() {
         Path statsPath =
             getDataFolder()
@@ -257,10 +272,12 @@ public final class InstigateHardcore extends JavaPlugin {
         }
     }
 
-    /**
-     * Performs Phase 6 crash/restart recovery and then loads
-     * the authoritative ACTIVE and STANDBY WorldSets.
+    /*
+     * ------------------------------------------------------------
+     * WORLD RECOVERY / WORLD SETS
+     * ------------------------------------------------------------
      */
+
     private boolean initializeWorldSets() {
         String lobbyWorldName =
             getConfig().getString(
@@ -394,9 +411,12 @@ public final class InstigateHardcore extends JavaPlugin {
         }
     }
 
-    /**
-     * Loads persistent per-attempt participation history.
+    /*
+     * ------------------------------------------------------------
+     * PARTICIPANTS
+     * ------------------------------------------------------------
      */
+
     private boolean initializeParticipants() {
         participantManager =
             new AttemptParticipantManager(
@@ -410,13 +430,6 @@ public final class InstigateHardcore extends JavaPlugin {
         try {
             participantManager.load();
 
-            /*
-             * Important:
-             *
-             * Do not clear the current participant set during a
-             * normal restart. ensureAttempt() only creates it when
-             * it does not already exist.
-             */
             participantManager.ensureAttempt(
                 statsManager
                     .getCurrentAttempt()
@@ -438,9 +451,12 @@ public final class InstigateHardcore extends JavaPlugin {
         }
     }
 
-    /**
-     * Loads persistent playtime and structured death telemetry.
+    /*
+     * ------------------------------------------------------------
+     * TELEMETRY
+     * ------------------------------------------------------------
      */
+
     private boolean initializeTelemetry() {
         telemetryManager =
             new PlayerTelemetryManager(
@@ -469,6 +485,37 @@ public final class InstigateHardcore extends JavaPlugin {
             return false;
         }
     }
+
+    private void initializeTelemetryCheckpoint() {
+        telemetryCheckpointTask =
+            getServer()
+                .getScheduler()
+                .runTaskTimer(
+                    this,
+                    () -> {
+                        try {
+                            telemetryManager
+                                .checkpointActiveSessions();
+                        } catch (
+                            IOException exception
+                        ) {
+                            getLogger().severe(
+                                "Failed to checkpoint player telemetry."
+                            );
+
+                            exception.printStackTrace();
+                        }
+                    },
+                    TELEMETRY_CHECKPOINT_INTERVAL_TICKS,
+                    TELEMETRY_CHECKPOINT_INTERVAL_TICKS
+                );
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * GAMEPLAY SYSTEMS
+     * ------------------------------------------------------------
+     */
 
     private void initializeCountdown() {
         int configuredSeconds =
@@ -566,19 +613,42 @@ public final class InstigateHardcore extends JavaPlugin {
             );
     }
 
+    /**
+     * Shared authoritative attempt-ending pipeline.
+     *
+     * Both player death and administrative reset use this.
+     */
+    private void initializeAttemptEnding() {
+        attemptEndManager =
+            new AttemptEndManager(
+                this,
+                runManager,
+                statsManager,
+                telemetryManager,
+                countdownManager,
+                playerResetManager,
+                worldRotationManager
+            );
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * LISTENERS
+     * ------------------------------------------------------------
+     */
+
     private void registerListeners() {
+        /*
+         * DeathListener only detects/suppresses the actual death.
+         *
+         * AttemptEndManager owns progression afterward.
+         */
         getServer()
             .getPluginManager()
             .registerEvents(
                 new DeathListener(
-                    this,
-                    runManager,
-                    statsManager,
-                    telemetryManager,
-                    countdownManager,
-                    playerResetManager,
                     worldSetManager,
-                    worldRotationManager
+                    attemptEndManager
                 ),
                 this
             );
@@ -621,12 +691,12 @@ public final class InstigateHardcore extends JavaPlugin {
             );
     }
 
-    /**
-     * Registers:
-     *
-     * /hardcore
-     * /hc
+    /*
+     * ------------------------------------------------------------
+     * COMMANDS
+     * ------------------------------------------------------------
      */
+
     private boolean initializeCommands() {
         PluginCommand hardcoreCommand =
             getCommand(
@@ -643,17 +713,6 @@ public final class InstigateHardcore extends JavaPlugin {
             return false;
         }
 
-        /*
-         * Phase 7B command implementation.
-         *
-         * HardcoreCommand now has access to telemetry so it can
-         * provide:
-         *
-         * /hc status
-         * /hc stats
-         * /hc stats <player>
-         * /hc deaths
-         */
         HardcoreCommand executor =
             new HardcoreCommand(
                 runManager,
@@ -662,14 +721,10 @@ public final class InstigateHardcore extends JavaPlugin {
                 telemetryManager,
                 worldSetManager,
                 worldRotationManager,
-                worldCleanupManager
+                worldCleanupManager,
+                attemptEndManager
             );
 
-        /*
-         * Historical StatsManager players are used for
-         * /hc stats <TAB>, allowing offline participants to appear
-         * in completion suggestions.
-         */
         HardcoreTabCompleter tabCompleter =
             new HardcoreTabCompleter(
                 statsManager
@@ -690,41 +745,12 @@ public final class InstigateHardcore extends JavaPlugin {
         return true;
     }
 
-    /**
-     * Periodically commits active playtime without ending the
-     * sessions.
+    /*
+     * ------------------------------------------------------------
+     * ALREADY-ONLINE PLAYERS
+     * ------------------------------------------------------------
      */
-    private void initializeTelemetryCheckpoint() {
-        telemetryCheckpointTask =
-            getServer()
-                .getScheduler()
-                .runTaskTimer(
-                    this,
-                    () -> {
-                        try {
-                            telemetryManager
-                                .checkpointActiveSessions();
-                        } catch (
-                            IOException exception
-                        ) {
-                            getLogger().severe(
-                                "Failed to checkpoint player telemetry."
-                            );
 
-                            exception.printStackTrace();
-                        }
-                    },
-                    TELEMETRY_CHECKPOINT_INTERVAL_TICKS,
-                    TELEMETRY_CHECKPOINT_INTERVAL_TICKS
-                );
-    }
-
-    /**
-     * Primarily protects development/plugin-reload scenarios.
-     *
-     * Under a normal server startup players usually join after
-     * onEnable() and PlayerJoinListener handles this instead.
-     */
     private void registerExistingPlayers() {
         for (
             Player player :
@@ -793,6 +819,12 @@ public final class InstigateHardcore extends JavaPlugin {
             scoreboardManager.refresh();
         }
     }
+
+    /*
+     * ------------------------------------------------------------
+     * STARTUP LOGGING
+     * ------------------------------------------------------------
+     */
 
     private void logStartupState() {
         getLogger().info(
@@ -876,6 +908,10 @@ public final class InstigateHardcore extends JavaPlugin {
         );
 
         getLogger().info(
+            "Shared attempt-ending pipeline enabled."
+        );
+
+        getLogger().info(
             "Hardcore command framework enabled."
         );
     }
@@ -887,6 +923,12 @@ public final class InstigateHardcore extends JavaPlugin {
                 this
             );
     }
+
+    /*
+     * ------------------------------------------------------------
+     * GETTERS
+     * ------------------------------------------------------------
+     */
 
     public RunManager getRunManager() {
         return runManager;
@@ -934,5 +976,9 @@ public final class InstigateHardcore extends JavaPlugin {
 
     public WorldRotationManager getWorldRotationManager() {
         return worldRotationManager;
+    }
+
+    public AttemptEndManager getAttemptEndManager() {
+        return attemptEndManager;
     }
 }

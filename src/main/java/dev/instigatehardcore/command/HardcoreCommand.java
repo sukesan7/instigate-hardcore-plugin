@@ -1,5 +1,6 @@
 package dev.instigatehardcore.command;
 
+import dev.instigatehardcore.core.AttemptEndManager;
 import dev.instigatehardcore.core.RunManager;
 import dev.instigatehardcore.participation.AttemptParticipant;
 import dev.instigatehardcore.participation.AttemptParticipantManager;
@@ -24,14 +25,20 @@ import org.bukkit.entity.Player;
 
 import java.time.Duration;
 import java.time.Instant;
+
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
 public final class HardcoreCommand
     implements CommandExecutor {
+
+    private static final long RESET_CONFIRMATION_WINDOW_MILLIS =
+        30_000L;
 
     private final RunManager runManager;
     private final StatsManager statsManager;
@@ -43,6 +50,11 @@ public final class HardcoreCommand
     private final WorldRotationManager worldRotationManager;
     private final WorldCleanupManager worldCleanupManager;
 
+    private final AttemptEndManager attemptEndManager;
+
+    private final Map<String, ResetConfirmation> resetConfirmations =
+        new HashMap<>();
+
     public HardcoreCommand(
         RunManager runManager,
         StatsManager statsManager,
@@ -50,7 +62,8 @@ public final class HardcoreCommand
         PlayerTelemetryManager telemetryManager,
         WorldSetManager worldSetManager,
         WorldRotationManager worldRotationManager,
-        WorldCleanupManager worldCleanupManager
+        WorldCleanupManager worldCleanupManager,
+        AttemptEndManager attemptEndManager
     ) {
         this.runManager =
             Objects.requireNonNull(
@@ -85,6 +98,11 @@ public final class HardcoreCommand
         this.worldCleanupManager =
             Objects.requireNonNull(
                 worldCleanupManager
+            );
+
+        this.attemptEndManager =
+            Objects.requireNonNull(
+                attemptEndManager
             );
     }
 
@@ -155,9 +173,9 @@ public final class HardcoreCommand
                     yield true;
                 }
 
-                sendNotImplemented(
+                handleReset(
                     sender,
-                    "reset"
+                    args
                 );
 
                 yield true;
@@ -216,12 +234,311 @@ public final class HardcoreCommand
         };
     }
 
+    /*
+     * ------------------------------------------------------------
+     * RESET
+     * ------------------------------------------------------------
+     */
+
+    private void handleReset(
+        CommandSender sender,
+        String[] args
+    ) {
+        if (args.length == 1) {
+            requestResetConfirmation(
+                sender
+            );
+
+            return;
+        }
+
+        if (
+            args.length == 2
+                && args[1].equalsIgnoreCase(
+                    "confirm"
+                )
+        ) {
+            confirmReset(
+                sender
+            );
+
+            return;
+        }
+
+        sender.sendMessage(
+            Component.text(
+                "Usage: /hc reset [confirm]",
+                NamedTextColor.RED
+            )
+        );
+    }
+
+    private void requestResetConfirmation(
+        CommandSender sender
+    ) {
+        if (!runManager.isActive()) {
+            sender.sendMessage(
+                Component.text()
+                    .append(
+                        Component.text(
+                            "The current attempt cannot be reset while state is ",
+                            NamedTextColor.RED
+                        )
+                    )
+                    .append(
+                        Component.text(
+                            runManager
+                                .getState()
+                                .name(),
+                            NamedTextColor.WHITE
+                        )
+                    )
+                    .append(
+                        Component.text(
+                            ".",
+                            NamedTextColor.RED
+                        )
+                    )
+                    .build()
+            );
+
+            return;
+        }
+
+        int attempt =
+            statsManager
+                .getCurrentAttempt();
+
+        long expiresAt =
+            System.currentTimeMillis()
+                + RESET_CONFIRMATION_WINDOW_MILLIS;
+
+        resetConfirmations.put(
+            resetConfirmationKey(
+                sender
+            ),
+            new ResetConfirmation(
+                attempt,
+                expiresAt
+            )
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            divider()
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "INSTIGATE CAFE HARDCORE",
+                NamedTextColor.GOLD
+            ).decorate(
+                TextDecoration.BOLD
+            )
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "ADMINISTRATIVE RESET",
+                NamedTextColor.RED
+            ).decorate(
+                TextDecoration.BOLD
+            )
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "This will permanently end Attempt #"
+                    + attempt
+                    + ".",
+                NamedTextColor.WHITE
+            )
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "No player death will be recorded.",
+                NamedTextColor.GRAY
+            )
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            Component.text()
+                .append(
+                    Component.text(
+                        "Run ",
+                        NamedTextColor.GRAY
+                    )
+                )
+                .append(
+                    Component.text(
+                        "/hc reset confirm",
+                        NamedTextColor.GOLD
+                    ).decorate(
+                        TextDecoration.BOLD
+                    )
+                )
+                .append(
+                    Component.text(
+                        " within 30 seconds to continue.",
+                        NamedTextColor.GRAY
+                    )
+                )
+                .build()
+        );
+
+        sender.sendMessage(
+            divider()
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+    }
+
+    private void confirmReset(
+        CommandSender sender
+    ) {
+        String key =
+            resetConfirmationKey(
+                sender
+            );
+
+        ResetConfirmation confirmation =
+            resetConfirmations.remove(
+                key
+            );
+
+        if (confirmation == null) {
+            sendMissingResetConfirmation(
+                sender
+            );
+
+            return;
+        }
+
+        long now =
+            System.currentTimeMillis();
+
+        if (
+            now
+                > confirmation.expiresAt()
+        ) {
+            sender.sendMessage(
+                Component.text(
+                    "Reset confirmation expired. Run /hc reset again.",
+                    NamedTextColor.RED
+                )
+            );
+
+            return;
+        }
+
+        if (!runManager.isActive()) {
+            sender.sendMessage(
+                Component.text(
+                    "The attempt is no longer ACTIVE.",
+                    NamedTextColor.RED
+                )
+            );
+
+            return;
+        }
+
+        int currentAttempt =
+            statsManager
+                .getCurrentAttempt();
+
+        if (
+            confirmation.attempt()
+                != currentAttempt
+        ) {
+            sender.sendMessage(
+                Component.text(
+                    "That confirmation was for Attempt #"
+                        + confirmation.attempt()
+                        + ", but the server is now on Attempt #"
+                        + currentAttempt
+                        + ". Run /hc reset again.",
+                    NamedTextColor.RED
+                )
+            );
+
+            return;
+        }
+
+        boolean ended =
+            attemptEndManager
+                .endFromAdminReset(
+                    sender
+                );
+
+        if (!ended) {
+            sender.sendMessage(
+                Component.text(
+                    "The attempt could not be reset because it is no longer ACTIVE.",
+                    NamedTextColor.RED
+                )
+            );
+        }
+    }
+
+    private void sendMissingResetConfirmation(
+        CommandSender sender
+    ) {
+        sender.sendMessage(
+            Component.text(
+                "No active reset confirmation. Run /hc reset first.",
+                NamedTextColor.RED
+            )
+        );
+    }
+
+    private String resetConfirmationKey(
+        CommandSender sender
+    ) {
+        if (
+            sender
+                instanceof Player player
+        ) {
+            return "player:"
+                + player
+                    .getUniqueId();
+        }
+
+        return "sender:"
+            + sender
+                .getName()
+                .toLowerCase(
+                    Locale.ROOT
+                );
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * PLAYER STATS
+     * ------------------------------------------------------------
+     */
+
     private void handleStats(
         CommandSender sender,
         String[] args
     ) {
         if (args.length == 1) {
-            if (!(sender instanceof Player player)) {
+            if (
+                !(sender instanceof Player player)
+            ) {
                 sender.sendMessage(
                     Component.text(
                         "Console must specify a player: /hc stats <player>",
@@ -370,7 +687,8 @@ public final class HardcoreCommand
 
         sender.sendMessage(
             Component.text(
-                name + " — PLAYER STATS",
+                name
+                    + " — PLAYER STATS",
                 NamedTextColor.RED
             )
         );
@@ -417,7 +735,9 @@ public final class HardcoreCommand
             NamedTextColor.WHITE
         );
 
-        if (mostCommonCause.isPresent()) {
+        if (
+            mostCommonCause.isPresent()
+        ) {
             String cause =
                 mostCommonCause.get();
 
@@ -509,10 +829,6 @@ public final class HardcoreCommand
                         .build()
                 );
 
-                /*
-                 * Keep the original vanilla-style message visible
-                 * beneath each death.
-                 */
                 sender.sendMessage(
                     Component.text(
                         "   "
@@ -531,6 +847,12 @@ public final class HardcoreCommand
             Component.empty()
         );
     }
+
+    /*
+     * ------------------------------------------------------------
+     * DEATH LEADERBOARD
+     * ------------------------------------------------------------
+     */
 
     private void sendDeaths(
         CommandSender sender
@@ -575,7 +897,8 @@ public final class HardcoreCommand
                 )
             );
         } else {
-            int rank = 1;
+            int rank =
+                1;
 
             for (
                 PlayerStats player :
@@ -684,7 +1007,9 @@ public final class HardcoreCommand
         boolean hasDetails =
             false;
 
-        if (mostCommon.isPresent()) {
+        if (
+            mostCommon.isPresent()
+        ) {
             String cause =
                 mostCommon.get();
 
@@ -759,6 +1084,12 @@ public final class HardcoreCommand
         }
     }
 
+    /*
+     * ------------------------------------------------------------
+     * STATUS
+     * ------------------------------------------------------------
+     */
+
     private void sendStatus(
         CommandSender sender
     ) {
@@ -818,7 +1149,8 @@ public final class HardcoreCommand
         sendStatusEntry(
             sender,
             "Attempt",
-            "#" + attempt,
+            "#"
+                + attempt,
             NamedTextColor.GOLD
         );
 
@@ -1048,135 +1380,11 @@ public final class HardcoreCommand
                 );
     }
 
-    private String formatPlaytime(
-        long milliseconds
-    ) {
-        long totalSeconds =
-            Math.max(
-                0L,
-                milliseconds / 1000L
-            );
-
-        long hours =
-            totalSeconds / 3600L;
-
-        long minutes =
-            (
-                totalSeconds % 3600L
-            ) / 60L;
-
-        long seconds =
-            totalSeconds % 60L;
-
-        if (hours > 0) {
-            return String.format(
-                "%dh %02dm %02ds",
-                hours,
-                minutes,
-                seconds
-            );
-        }
-
-        if (minutes > 0) {
-            return String.format(
-                "%dm %02ds",
-                minutes,
-                seconds
-            );
-        }
-
-        return seconds + "s";
-    }
-
-    private String formatRelativeTime(
-        long timestamp
-    ) {
-        long seconds =
-            Math.max(
-                0L,
-                Duration.between(
-                    Instant.ofEpochMilli(
-                        timestamp
-                    ),
-                    Instant.now()
-                ).getSeconds()
-            );
-
-        if (seconds < 60) {
-            return seconds + "s ago";
-        }
-
-        long minutes =
-            seconds / 60;
-
-        if (minutes < 60) {
-            return minutes + "m ago";
-        }
-
-        long hours =
-            minutes / 60;
-
-        if (hours < 24) {
-            return hours + "h ago";
-        }
-
-        long days =
-            hours / 24;
-
-        return days + "d ago";
-    }
-
-    private String formatDuration(
-        Duration duration
-    ) {
-        long totalSeconds =
-            Math.max(
-                0L,
-                duration.getSeconds()
-            );
-
-        long hours =
-            totalSeconds / 3600;
-
-        long minutes =
-            (
-                totalSeconds % 3600
-            ) / 60;
-
-        long seconds =
-            totalSeconds % 60;
-
-        return String.format(
-            "%02d:%02d:%02d",
-            hours,
-            minutes,
-            seconds
-        );
-    }
-
-    private void sendStatusEntry(
-        CommandSender sender,
-        String label,
-        String value,
-        NamedTextColor valueColor
-    ) {
-        sender.sendMessage(
-            Component.text()
-                .append(
-                    Component.text(
-                        label + "  ",
-                        NamedTextColor.GRAY
-                    )
-                )
-                .append(
-                    Component.text(
-                        value,
-                        valueColor
-                    )
-                )
-                .build()
-        );
-    }
+    /*
+     * ------------------------------------------------------------
+     * HELP
+     * ------------------------------------------------------------
+     */
 
     private void sendHelp(
         CommandSender sender
@@ -1302,6 +1510,148 @@ public final class HardcoreCommand
         );
     }
 
+    /*
+     * ------------------------------------------------------------
+     * FORMATTERS / COMMON MESSAGES
+     * ------------------------------------------------------------
+     */
+
+    private String formatPlaytime(
+        long milliseconds
+    ) {
+        long totalSeconds =
+            Math.max(
+                0L,
+                milliseconds / 1000L
+            );
+
+        long hours =
+            totalSeconds / 3600L;
+
+        long minutes =
+            (
+                totalSeconds % 3600L
+            ) / 60L;
+
+        long seconds =
+            totalSeconds % 60L;
+
+        if (hours > 0) {
+            return String.format(
+                "%dh %02dm %02ds",
+                hours,
+                minutes,
+                seconds
+            );
+        }
+
+        if (minutes > 0) {
+            return String.format(
+                "%dm %02ds",
+                minutes,
+                seconds
+            );
+        }
+
+        return seconds
+            + "s";
+    }
+
+    private String formatRelativeTime(
+        long timestamp
+    ) {
+        long seconds =
+            Math.max(
+                0L,
+                Duration.between(
+                    Instant.ofEpochMilli(
+                        timestamp
+                    ),
+                    Instant.now()
+                ).getSeconds()
+            );
+
+        if (seconds < 60) {
+            return seconds
+                + "s ago";
+        }
+
+        long minutes =
+            seconds / 60;
+
+        if (minutes < 60) {
+            return minutes
+                + "m ago";
+        }
+
+        long hours =
+            minutes / 60;
+
+        if (hours < 24) {
+            return hours
+                + "h ago";
+        }
+
+        long days =
+            hours / 24;
+
+        return days
+            + "d ago";
+    }
+
+    private String formatDuration(
+        Duration duration
+    ) {
+        long totalSeconds =
+            Math.max(
+                0L,
+                duration.getSeconds()
+            );
+
+        long hours =
+            totalSeconds / 3600;
+
+        long minutes =
+            (
+                totalSeconds % 3600
+            ) / 60;
+
+        long seconds =
+            totalSeconds % 60;
+
+        return String.format(
+            "%02d:%02d:%02d",
+            hours,
+            minutes,
+            seconds
+        );
+    }
+
+    private void sendStatusEntry(
+        CommandSender sender,
+        String label,
+        String value,
+        NamedTextColor valueColor
+    ) {
+        sender.sendMessage(
+            Component.text()
+                .append(
+                    Component.text(
+                        label
+                            + "  ",
+                        NamedTextColor.GRAY
+                    )
+                )
+                .append(
+                    Component.text(
+                        value,
+                        valueColor
+                    )
+                )
+                .build()
+        );
+    }
+
     private void sendHelpEntry(
         CommandSender sender,
         String syntax,
@@ -1399,5 +1749,11 @@ public final class HardcoreCommand
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
             NamedTextColor.DARK_GRAY
         );
+    }
+
+    private record ResetConfirmation(
+        int attempt,
+        long expiresAt
+    ) {
     }
 }

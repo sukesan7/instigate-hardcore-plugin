@@ -32,6 +32,25 @@ public final class HardcoreTabCompleter
         String alias,
         String[] args
     ) {
+        Objects.requireNonNull(
+            sender
+        );
+
+        Objects.requireNonNull(
+            command
+        );
+
+        Objects.requireNonNull(
+            alias
+        );
+
+        Objects.requireNonNull(
+            args
+        );
+
+        /*
+         * /hc <TAB>
+         */
         if (args.length == 1) {
             List<String> commands =
                 new ArrayList<>();
@@ -82,6 +101,13 @@ public final class HardcoreTabCompleter
             );
         }
 
+        /*
+         * /hc stats <player>
+         *
+         * Use persistent StatsManager records rather than only
+         * currently-online players so historical/offline players
+         * can also be tab-completed.
+         */
         if (
             args.length == 2
                 && args[0].equalsIgnoreCase(
@@ -105,6 +131,33 @@ public final class HardcoreTabCompleter
             );
         }
 
+        /*
+         * /hc reset <TAB>
+         *
+         * Only administrators should ever see the confirmation
+         * suggestion.
+         */
+        if (
+            args.length == 2
+                && args[0].equalsIgnoreCase(
+                    "reset"
+                )
+                && sender.hasPermission(
+                    "instigatehardcore.admin"
+                )
+        ) {
+            return filter(
+                List.of(
+                    "confirm"
+                ),
+                args[1]
+            );
+        }
+
+        /*
+         * Prevent Bukkit from suggesting unrelated values for
+         * commands that do not currently have more arguments.
+         */
         return List.of();
     }
 
