@@ -246,6 +246,14 @@ public final class WorldRotationManager {
             .beginRotation();
 
         /*
+         * The standby has been frozen at a deterministic morning
+         * while waiting. Reassert that state and resume normal
+         * time/weather progression before moving the first player.
+         */
+        worldSetManager
+            .prepareStandbyForActivation();
+
+        /*
          * Make sure the incoming attempt exists in persistent
          * participation history before players are transferred.
          */

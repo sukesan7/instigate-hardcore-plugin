@@ -2,6 +2,7 @@ package dev.instigatehardcore.world;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Difficulty;
+import org.bukkit.GameRules;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
@@ -13,6 +14,9 @@ import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class WorldSetManager {
+
+    private static final long STANDBY_START_TIME =
+        1000L;
 
     private final JavaPlugin plugin;
     private final WorldStateStore stateStore;
@@ -112,6 +116,15 @@ public final class WorldSetManager {
                 state.activeSeed()
             );
 
+        /*
+         * ACTIVE worlds recovered during a normal restart must keep
+         * their existing time/weather, but their gameplay cycles
+         * must be running.
+         */
+        prepareActiveWorldSetAfterStartup(
+            activeWorldSet
+        );
+
         plugin.getLogger().info(
             "[Instigate Cafe Hardcore] "
                 + "Preparing standby attempt #"
@@ -124,6 +137,10 @@ public final class WorldSetManager {
                 state.standbyAttempt(),
                 state.standbySeed()
             );
+
+        prepareStandbyWorldSet(
+            standbyWorldSet
+        );
 
         retiredWorldSet =
             null;
@@ -420,6 +437,10 @@ public final class WorldSetManager {
                 state.standbySeed()
             );
 
+        prepareStandbyWorldSet(
+            standbyWorldSet
+        );
+
         plugin.getLogger().info(
             "[Instigate Cafe Hardcore] "
                 + "Standby attempt #"
@@ -466,6 +487,146 @@ public final class WorldSetManager {
 
         retiredWorldSet =
             null;
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * STANDBY WORLD STATE
+     * ------------------------------------------------------------
+     */
+
+    /**
+     * Keeps a STANDBY attempt in a deterministic fresh-start state.
+     *
+     * Only the Overworld has a normal day/night and weather cycle,
+     * so the Nether and End are intentionally left alone.
+     */
+    private void prepareStandbyWorldSet(
+        WorldSet worldSet
+    ) {
+        Objects.requireNonNull(
+            worldSet
+        );
+
+        World overworld =
+            worldSet.overworld();
+
+        /*
+         * setTime() changes the relative time of day without
+         * rewinding the world's absolute game time.
+         */
+        overworld.setTime(
+            STANDBY_START_TIME
+        );
+
+        overworld.setStorm(
+            false
+        );
+
+        overworld.setThundering(
+            false
+        );
+
+        overworld.setGameRule(
+            GameRules.ADVANCE_TIME,
+            false
+        );
+
+        overworld.setGameRule(
+            GameRules.ADVANCE_WEATHER,
+            false
+        );
+
+        plugin.getLogger().info(
+            "[Instigate Cafe Hardcore] "
+                + "Standby attempt #"
+                + worldSet.attemptNumber()
+                + " frozen at morning with clear weather."
+        );
+    }
+
+    /**
+     * Restores normal Overworld cycles for the ACTIVE attempt during
+     * plugin startup.
+     *
+     * Do not alter time or weather here. A normal Paper restart in
+     * the middle of an attempt must preserve the attempt exactly as
+     * it was.
+     */
+    private void prepareActiveWorldSetAfterStartup(
+        WorldSet worldSet
+    ) {
+        Objects.requireNonNull(
+            worldSet
+        );
+
+        World overworld =
+            worldSet.overworld();
+
+        overworld.setGameRule(
+            GameRules.ADVANCE_TIME,
+            true
+        );
+
+        overworld.setGameRule(
+            GameRules.ADVANCE_WEATHER,
+            true
+        );
+    }
+
+    /**
+     * Converts the current STANDBY attempt into its fresh ACTIVE
+     * starting state immediately before players are transferred.
+     *
+     * The morning/clear state is asserted again in case another
+     * plugin or an administrator modified the standby while it was
+     * waiting.
+     */
+    public synchronized void prepareStandbyForActivation()
+        throws IOException {
+
+        if (standbyWorldSet == null) {
+            throw new IOException(
+                "Cannot prepare standby for activation because "
+                    + "no standby WorldSet exists."
+            );
+        }
+
+        World overworld =
+            standbyWorldSet.overworld();
+
+        overworld.setTime(
+            STANDBY_START_TIME
+        );
+
+        overworld.setStorm(
+            false
+        );
+
+        overworld.setThundering(
+            false
+        );
+
+        /*
+         * The world is about to become playable. Resume normal
+         * progression before the first player is transferred.
+         */
+        overworld.setGameRule(
+            GameRules.ADVANCE_TIME,
+            true
+        );
+
+        overworld.setGameRule(
+            GameRules.ADVANCE_WEATHER,
+            true
+        );
+
+        plugin.getLogger().info(
+            "[Instigate Cafe Hardcore] "
+                + "Standby attempt #"
+                + standbyWorldSet.attemptNumber()
+                + " prepared for ACTIVE gameplay at morning."
+        );
     }
 
     private void validateLoadedWorldsAgainstState(
