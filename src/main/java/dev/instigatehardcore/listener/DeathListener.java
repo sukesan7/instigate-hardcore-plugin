@@ -1,6 +1,7 @@
 package dev.instigatehardcore.listener;
 
 import dev.instigatehardcore.core.RunManager;
+import dev.instigatehardcore.countdown.CountdownManager;
 import dev.instigatehardcore.stats.PlayerStats;
 import dev.instigatehardcore.stats.StatsManager;
 import net.kyori.adventure.text.Component;
@@ -19,15 +20,18 @@ public final class DeathListener implements Listener {
     private final JavaPlugin plugin;
     private final RunManager runManager;
     private final StatsManager statsManager;
+    private final CountdownManager countdownManager;
 
     public DeathListener(
         JavaPlugin plugin,
         RunManager runManager,
-        StatsManager statsManager
+        StatsManager statsManager,
+        CountdownManager countdownManager
     ) {
         this.plugin = Objects.requireNonNull(plugin);
         this.runManager = Objects.requireNonNull(runManager);
         this.statsManager = Objects.requireNonNull(statsManager);
+        this.countdownManager = Objects.requireNonNull(countdownManager);
     }
 
     @EventHandler
@@ -35,10 +39,24 @@ public final class DeathListener implements Listener {
         Player player = event.getEntity();
 
         /*
-         * Only the first death during an ACTIVE run may
-         * end the current hardcore attempt.
+         * Preserve Minecraft's generated death message before
+         * suppressing the normal server-wide broadcast.
+         */
+        Component deathMessage = event.deathMessage();
+
+        /*
+         * Only the first death during an ACTIVE run is allowed
+         * to end the current hardcore attempt.
          */
         if (!runManager.beginEnding()) {
+            /*
+             * The run is already ending/resetting.
+             *
+             * Suppress additional vanilla death announcements
+             * so the run-ending UI remains clean.
+             */
+            event.deathMessage(null);
+
             plugin.getLogger().fine(
                 "Ignoring death of "
                     + player.getName()
@@ -49,9 +67,17 @@ public final class DeathListener implements Listener {
             return;
         }
 
-        int attemptNumber = statsManager.getCurrentAttempt();
+        /*
+         * We are replacing the normal Minecraft death broadcast
+         * with our branded Instigate Cafe Hardcore announcement.
+         */
+        event.deathMessage(null);
 
-        PlayerStats playerStats = recordDeath(player);
+        int attemptNumber =
+            statsManager.getCurrentAttempt();
+
+        PlayerStats playerStats =
+            recordDeath(player);
 
         plugin.getLogger().info(
             "[Instigate Cafe Hardcore] "
@@ -62,10 +88,13 @@ public final class DeathListener implements Listener {
         );
 
         announceRunEnd(
-            event,
+            player,
+            deathMessage,
             attemptNumber,
             playerStats
         );
+
+        startCountdown(attemptNumber);
     }
 
     private PlayerStats recordDeath(Player player) {
@@ -86,18 +115,60 @@ public final class DeathListener implements Listener {
             return new PlayerStats(
                 player.getUniqueId(),
                 player.getName(),
-                statsManager.getDeaths(player.getUniqueId())
+                statsManager.getDeaths(
+                    player.getUniqueId()
+                )
             );
         }
     }
 
+    private void startCountdown(
+        int attemptNumber
+    ) {
+        boolean started =
+            countdownManager.startCountdown(
+                attemptNumber,
+                this::onCountdownComplete
+            );
+
+        if (!started) {
+            plugin.getLogger().warning(
+                "[Instigate Cafe Hardcore] "
+                    + "Attempted to start a second reset countdown."
+            );
+        }
+    }
+
+    private void onCountdownComplete() {
+        if (!runManager.beginResetting()) {
+            plugin.getLogger().severe(
+                "[Instigate Cafe Hardcore] "
+                    + "Countdown completed but run state could not "
+                    + "transition to RESETTING."
+            );
+
+            return;
+        }
+
+        plugin.getLogger().info(
+            "[Instigate Cafe Hardcore] "
+                + "Run state transitioned to RESETTING."
+        );
+
+        /*
+         * Phase 6 will invoke ResetManager here.
+         *
+         * For now we intentionally stop at RESETTING so that
+         * no filesystem or server shutdown operations happen yet.
+         */
+    }
+
     private void announceRunEnd(
-        PlayerDeathEvent event,
+        Player player,
+        Component deathMessage,
         int attemptNumber,
         PlayerStats playerStats
     ) {
-        Component deathMessage = event.deathMessage();
-
         Component divider = Component.text(
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
             NamedTextColor.DARK_RED
@@ -114,7 +185,7 @@ public final class DeathListener implements Listener {
         );
 
         Component fallbackDeathMessage = Component.text(
-            event.getEntity().getName() + " died.",
+            player.getName() + " died.",
             NamedTextColor.WHITE
         );
 
@@ -123,31 +194,65 @@ public final class DeathListener implements Listener {
                 + " now has "
                 + playerStats.deaths()
                 + " total "
-                + (playerStats.deaths() == 1 ? "death." : "deaths."),
+                + (
+                    playerStats.deaths() == 1
+                        ? "death."
+                        : "deaths."
+                ),
             NamedTextColor.GRAY
         );
 
         Component resetMessage = Component.text(
-            "Resetting in 10 seconds...",
+            "Resetting in "
+                + countdownManager.getDurationSeconds()
+                + " seconds...",
             NamedTextColor.GRAY
         );
 
-        plugin.getServer().broadcast(Component.empty());
-        plugin.getServer().broadcast(divider);
-        plugin.getServer().broadcast(brand);
-        plugin.getServer().broadcast(attempt);
-        plugin.getServer().broadcast(Component.empty());
+        plugin.getServer().broadcast(
+            Component.empty()
+        );
 
-        if (deathMessage != null) {
-            plugin.getServer().broadcast(deathMessage);
-        } else {
-            plugin.getServer().broadcast(fallbackDeathMessage);
-        }
+        plugin.getServer().broadcast(
+            divider
+        );
 
-        plugin.getServer().broadcast(deathCount);
-        plugin.getServer().broadcast(Component.empty());
-        plugin.getServer().broadcast(resetMessage);
-        plugin.getServer().broadcast(divider);
-        plugin.getServer().broadcast(Component.empty());
+        plugin.getServer().broadcast(
+            brand
+        );
+
+        plugin.getServer().broadcast(
+            attempt
+        );
+
+        plugin.getServer().broadcast(
+            Component.empty()
+        );
+
+        plugin.getServer().broadcast(
+            deathMessage != null
+                ? deathMessage
+                : fallbackDeathMessage
+        );
+
+        plugin.getServer().broadcast(
+            deathCount
+        );
+
+        plugin.getServer().broadcast(
+            Component.empty()
+        );
+
+        plugin.getServer().broadcast(
+            resetMessage
+        );
+
+        plugin.getServer().broadcast(
+            divider
+        );
+
+        plugin.getServer().broadcast(
+            Component.empty()
+        );
     }
 }

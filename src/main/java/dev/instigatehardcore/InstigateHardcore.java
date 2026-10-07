@@ -1,6 +1,7 @@
 package dev.instigatehardcore;
 
 import dev.instigatehardcore.core.RunManager;
+import dev.instigatehardcore.countdown.CountdownManager;
 import dev.instigatehardcore.listener.DeathListener;
 import dev.instigatehardcore.stats.StatsManager;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -10,8 +11,11 @@ import java.nio.file.Path;
 
 public final class InstigateHardcore extends JavaPlugin {
 
+    private static final int DEFAULT_COUNTDOWN_SECONDS = 10;
+
     private RunManager runManager;
     private StatsManager statsManager;
+    private CountdownManager countdownManager;
 
     @Override
     public void onEnable() {
@@ -35,6 +39,7 @@ public final class InstigateHardcore extends JavaPlugin {
             return;
         }
 
+        initializeCountdown();
         registerListeners();
 
         getLogger().info(
@@ -50,16 +55,27 @@ public final class InstigateHardcore extends JavaPlugin {
             "Run state: "
                 + runManager.getState()
         );
+
+        getLogger().info(
+            "Reset countdown: "
+                + countdownManager.getDurationSeconds()
+                + " seconds"
+        );
     }
 
     @Override
     public void onDisable() {
+        if (countdownManager != null) {
+            countdownManager.cancel();
+        }
+
         if (statsManager != null) {
             try {
                 statsManager.save();
             } catch (IOException exception) {
                 getLogger().severe(
-                    "Failed to save persistent statistics during shutdown."
+                    "Failed to save persistent statistics "
+                        + "during shutdown."
                 );
 
                 exception.printStackTrace();
@@ -76,7 +92,9 @@ public final class InstigateHardcore extends JavaPlugin {
             .toPath()
             .resolve("stats.properties");
 
-        statsManager = new StatsManager(statsPath);
+        statsManager = new StatsManager(
+            statsPath
+        );
 
         try {
             statsManager.load();
@@ -97,6 +115,32 @@ public final class InstigateHardcore extends JavaPlugin {
         }
     }
 
+    private void initializeCountdown() {
+        int configuredSeconds = getConfig().getInt(
+            "reset.countdown-seconds",
+            DEFAULT_COUNTDOWN_SECONDS
+        );
+
+        if (configuredSeconds < 1) {
+            getLogger().warning(
+                "Invalid reset.countdown-seconds value: "
+                    + configuredSeconds
+                    + ". Using default of "
+                    + DEFAULT_COUNTDOWN_SECONDS
+                    + "."
+            );
+
+            configuredSeconds =
+                DEFAULT_COUNTDOWN_SECONDS;
+        }
+
+        countdownManager =
+            new CountdownManager(
+                this,
+                configuredSeconds
+            );
+    }
+
     private void registerListeners() {
         getServer()
             .getPluginManager()
@@ -104,7 +148,8 @@ public final class InstigateHardcore extends JavaPlugin {
                 new DeathListener(
                     this,
                     runManager,
-                    statsManager
+                    statsManager,
+                    countdownManager
                 ),
                 this
             );
@@ -116,5 +161,9 @@ public final class InstigateHardcore extends JavaPlugin {
 
     public StatsManager getStatsManager() {
         return statsManager;
+    }
+
+    public CountdownManager getCountdownManager() {
+        return countdownManager;
     }
 }

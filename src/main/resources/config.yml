@@ -1,7 +1,4 @@
-# InstigateHardcore
-#
-# Gameplay configuration will be introduced incrementally
-# as each system is implemented and tested.
+# Instigate Cafe Hardcore
 
 reset:
   countdown-seconds: 10
