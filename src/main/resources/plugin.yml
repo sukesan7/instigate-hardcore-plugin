@@ -5,6 +5,28 @@ api-version: '26.3'
 
 description: Shared-death hardcore survival for multiplayer Paper servers.
 authors:
-  - Instigate
+  - Sukesan
+  - InstigateCafe
 
 load: POSTWORLD
+
+commands:
+  hardcore:
+    description: Instigate Cafe Hardcore commands.
+    usage: /hardcore help
+    aliases:
+      - hc
+    permission: instigatehardcore.command
+
+permissions:
+  instigatehardcore.command:
+    description: Access Instigate Cafe Hardcore commands.
+    default: true
+
+  instigatehardcore.admin:
+    description: Access administrative Instigate Cafe Hardcore controls.
+    default: op
+
+  instigatehardcore.debug:
+    description: Access Instigate Cafe Hardcore diagnostics.
+    default: op
