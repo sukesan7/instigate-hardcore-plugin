@@ -7,6 +7,7 @@ import dev.instigatehardcore.listener.PlayerJoinListener;
 import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
+import dev.instigatehardcore.world.WorldRotationManager;
 import dev.instigatehardcore.world.WorldSetManager;
 import dev.instigatehardcore.world.WorldStateStore;
 
@@ -18,9 +19,14 @@ import java.nio.file.Path;
 
 public final class InstigateHardcore extends JavaPlugin {
 
-    private static final int DEFAULT_COUNTDOWN_SECONDS = 10;
-    private static final long DEFAULT_SCOREBOARD_UPDATE_INTERVAL = 20L;
-    private static final int DEFAULT_PRELOAD_RADIUS_CHUNKS = 1;
+    private static final int DEFAULT_COUNTDOWN_SECONDS =
+        10;
+
+    private static final long DEFAULT_SCOREBOARD_UPDATE_INTERVAL =
+        20L;
+
+    private static final int DEFAULT_PRELOAD_RADIUS_CHUNKS =
+        1;
 
     private RunManager runManager;
     private StatsManager statsManager;
@@ -28,34 +34,30 @@ public final class InstigateHardcore extends JavaPlugin {
     private HardcoreScoreboardManager scoreboardManager;
     private PlayerResetManager playerResetManager;
     private WorldSetManager worldSetManager;
+    private WorldRotationManager worldRotationManager;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
 
         /*
-         * Persistent campaign state must load before world state.
-         *
-         * The current attempt number stored in StatsManager is used
-         * to validate which WorldSet should currently be ACTIVE.
+         * Campaign statistics establish which attempt number
+         * should currently be active.
          */
         if (!initializeStats()) {
             return;
         }
 
         /*
-         * Prepare the permanent lobby, ACTIVE attempt worlds,
-         * and STANDBY attempt worlds before gameplay becomes active.
+         * Create/load the ACTIVE and STANDBY WorldSets before
+         * declaring gameplay active.
          */
         if (!initializeWorldSets()) {
             return;
         }
 
-        /*
-         * The run should only become ACTIVE after the world pipeline
-         * has successfully initialized.
-         */
-        runManager = new RunManager();
+        runManager =
+            new RunManager();
 
         if (!runManager.startRun()) {
             getLogger().severe(
@@ -69,39 +71,36 @@ public final class InstigateHardcore extends JavaPlugin {
             return;
         }
 
-        /*
-         * Handles inventory/state cleanup and spectator transitions
-         * between failed and new attempts.
-         */
         playerResetManager =
-            new PlayerResetManager(this);
+            new PlayerResetManager(
+                this
+            );
 
         initializeCountdown();
         initializeScoreboard();
+        initializeWorldRotation();
+
         registerListeners();
 
         /*
-         * Start the scoreboard updater only after the managers and
-         * listeners are fully initialized.
+         * Start the periodic scoreboard after all systems have
+         * been constructed.
          */
         if (scoreboardManager != null) {
             scoreboardManager.start();
-
-            /*
-             * Normally nobody is online during initial startup,
-             * but this also supports development reload scenarios.
-             */
-            registerExistingPlayers();
         }
+
+        /*
+         * Supports development reloads or other cases where
+         * players happen to already be online.
+         */
+        registerExistingPlayers();
 
         logStartupState();
     }
 
     @Override
     public void onDisable() {
-        /*
-         * Stop scheduled systems before saving persistent state.
-         */
         if (countdownManager != null) {
             countdownManager.cancel();
         }
@@ -110,15 +109,15 @@ public final class InstigateHardcore extends JavaPlugin {
             scoreboardManager.stop();
         }
 
-        /*
-         * Make one final attempt to persist campaign statistics.
-         */
         if (statsManager != null) {
             try {
                 statsManager.save();
-            } catch (IOException exception) {
+            } catch (
+                IOException exception
+            ) {
                 getLogger().severe(
-                    "Failed to save persistent statistics during shutdown."
+                    "Failed to save persistent statistics "
+                        + "during shutdown."
                 );
 
                 exception.printStackTrace();
@@ -130,24 +129,26 @@ public final class InstigateHardcore extends JavaPlugin {
         );
     }
 
-    /**
-     * Initializes persistent campaign statistics.
-     *
-     * @return true if statistics loaded successfully
-     */
     private boolean initializeStats() {
         Path statsPath =
             getDataFolder()
                 .toPath()
-                .resolve("stats.properties");
+                .resolve(
+                    "stats.properties"
+                );
 
         statsManager =
-            new StatsManager(statsPath);
+            new StatsManager(
+                statsPath
+            );
 
         try {
             statsManager.load();
+
             return true;
-        } catch (IOException exception) {
+        } catch (
+            IOException exception
+        ) {
             getLogger().severe(
                 "Unable to load persistent hardcore statistics."
             );
@@ -162,13 +163,6 @@ public final class InstigateHardcore extends JavaPlugin {
         }
     }
 
-    /**
-     * Initializes the permanent lobby plus ACTIVE/STANDBY attempt worlds.
-     *
-     * The resulting state is persisted under:
-     *
-     * plugins/InstigateHardcore/world-state.properties
-     */
     private boolean initializeWorldSets() {
         String lobbyWorldName =
             getConfig().getString(
@@ -181,10 +175,12 @@ public final class InstigateHardcore extends JavaPlugin {
                 || lobbyWorldName.isBlank()
         ) {
             getLogger().warning(
-                "Invalid worlds.lobby-world value. Using \"world\"."
+                "Invalid worlds.lobby-world value. "
+                    + "Using \"world\"."
             );
 
-            lobbyWorldName = "world";
+            lobbyWorldName =
+                "world";
         }
 
         int preloadRadius =
@@ -225,11 +221,14 @@ public final class InstigateHardcore extends JavaPlugin {
 
         try {
             worldSetManager.initialize(
-                statsManager.getCurrentAttempt()
+                statsManager
+                    .getCurrentAttempt()
             );
 
             return true;
-        } catch (IOException exception) {
+        } catch (
+            IOException exception
+        ) {
             getLogger().severe(
                 "Unable to initialize hardcore world pipeline."
             );
@@ -244,9 +243,6 @@ public final class InstigateHardcore extends JavaPlugin {
         }
     }
 
-    /**
-     * Initializes the run-ending countdown using config.yml.
-     */
     private void initializeCountdown() {
         int configuredSeconds =
             getConfig().getInt(
@@ -274,9 +270,6 @@ public final class InstigateHardcore extends JavaPlugin {
             );
     }
 
-    /**
-     * Initializes the sidebar scoreboard if enabled.
-     */
     private void initializeScoreboard() {
         boolean enabled =
             getConfig().getBoolean(
@@ -289,7 +282,9 @@ public final class InstigateHardcore extends JavaPlugin {
                 "Hardcore scoreboard disabled by configuration."
             );
 
-            scoreboardManager = null;
+            scoreboardManager =
+                null;
+
             return;
         }
 
@@ -321,9 +316,18 @@ public final class InstigateHardcore extends JavaPlugin {
             );
     }
 
-    /**
-     * Registers all Bukkit/Paper event listeners.
-     */
+    private void initializeWorldRotation() {
+        worldRotationManager =
+            new WorldRotationManager(
+                this,
+                runManager,
+                statsManager,
+                playerResetManager,
+                worldSetManager,
+                scoreboardManager
+            );
+    }
+
     private void registerListeners() {
         getServer()
             .getPluginManager()
@@ -333,44 +337,50 @@ public final class InstigateHardcore extends JavaPlugin {
                     runManager,
                     statsManager,
                     countdownManager,
-                    playerResetManager
+                    playerResetManager,
+                    worldSetManager,
+                    worldRotationManager
                 ),
                 this
             );
 
-        if (scoreboardManager != null) {
-            getServer()
-                .getPluginManager()
-                .registerEvents(
-                    new PlayerJoinListener(
-                        this,
-                        statsManager,
-                        scoreboardManager
-                    ),
-                    this
-                );
-        }
+        /*
+         * PlayerJoinListener must always be registered because it
+         * is also responsible for placing players into the ACTIVE
+         * attempt. It is not merely a scoreboard listener.
+         */
+        getServer()
+            .getPluginManager()
+            .registerEvents(
+                new PlayerJoinListener(
+                    this,
+                    statsManager,
+                    scoreboardManager,
+                    runManager,
+                    playerResetManager,
+                    worldSetManager
+                ),
+                this
+            );
     }
 
     /**
-     * Handles players who may already be online when the plugin
-     * starts or is reloaded during development.
+     * Handles already-online players during development reloads.
      */
     private void registerExistingPlayers() {
-        if (scoreboardManager == null) {
-            return;
-        }
-
         for (
             Player player :
-            getServer().getOnlinePlayers()
+            getServer()
+                .getOnlinePlayers()
         ) {
             try {
                 statsManager.ensurePlayer(
                     player.getUniqueId(),
                     player.getName()
                 );
-            } catch (IOException exception) {
+            } catch (
+                IOException exception
+            ) {
                 getLogger().severe(
                     "Failed to register online player "
                         + player.getName()
@@ -380,17 +390,18 @@ public final class InstigateHardcore extends JavaPlugin {
                 exception.printStackTrace();
             }
 
-            scoreboardManager.assign(
-                player
-            );
+            if (scoreboardManager != null) {
+                scoreboardManager.assign(
+                    player
+                );
+            }
         }
 
-        scoreboardManager.refresh();
+        if (scoreboardManager != null) {
+            scoreboardManager.refresh();
+        }
     }
 
-    /**
-     * Logs the major systems that were initialized successfully.
-     */
     private void logStartupState() {
         getLogger().info(
             "Instigate Cafe Hardcore enabled."
@@ -398,17 +409,20 @@ public final class InstigateHardcore extends JavaPlugin {
 
         getLogger().info(
             "Current attempt: #"
-                + statsManager.getCurrentAttempt()
+                + statsManager
+                    .getCurrentAttempt()
         );
 
         getLogger().info(
             "Run state: "
-                + runManager.getState()
+                + runManager
+                    .getState()
         );
 
         getLogger().info(
             "Reset countdown: "
-                + countdownManager.getDurationSeconds()
+                + countdownManager
+                    .getDurationSeconds()
                 + " seconds"
         );
 
@@ -420,12 +434,18 @@ public final class InstigateHardcore extends JavaPlugin {
                         .attemptNumber()
             );
 
-            getLogger().info(
-                "Standby world attempt: #"
-                    + worldSetManager
-                        .getStandbyWorldSet()
-                        .attemptNumber()
-            );
+            if (
+                worldSetManager
+                    .getStandbyWorldSet()
+                    != null
+            ) {
+                getLogger().info(
+                    "Standby world attempt: #"
+                        + worldSetManager
+                            .getStandbyWorldSet()
+                            .attemptNumber()
+                );
+            }
         }
 
         if (scoreboardManager != null) {
@@ -457,5 +477,9 @@ public final class InstigateHardcore extends JavaPlugin {
 
     public WorldSetManager getWorldSetManager() {
         return worldSetManager;
+    }
+
+    public WorldRotationManager getWorldRotationManager() {
+        return worldRotationManager;
     }
 }

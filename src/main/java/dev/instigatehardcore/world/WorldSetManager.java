@@ -10,6 +10,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
 import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 
 public final class WorldSetManager {
 
@@ -19,8 +20,10 @@ public final class WorldSetManager {
     private final int preloadRadiusChunks;
 
     private World lobbyWorld;
+
     private WorldSet activeWorldSet;
     private WorldSet standbyWorldSet;
+    private WorldSet retiredWorldSet;
 
     public WorldSetManager(
         JavaPlugin plugin,
@@ -48,13 +51,10 @@ public final class WorldSetManager {
     }
 
     /**
-     * Loads or creates:
-     *
-     * 1. permanent lobby world
-     * 2. active attempt WorldSet
-     * 3. standby attempt WorldSet
+     * Initializes the permanent lobby, ACTIVE attempt,
+     * and STANDBY attempt.
      */
-    public void initialize(
+    public synchronized void initialize(
         int currentAttempt
     ) throws IOException {
 
@@ -106,6 +106,8 @@ public final class WorldSetManager {
                 state.standbySeed()
             );
 
+        retiredWorldSet = null;
+
         logWorldState();
     }
 
@@ -142,6 +144,139 @@ public final class WorldSetManager {
         }
     }
 
+    /**
+     * Promotes the currently prepared STANDBY WorldSet
+     * to ACTIVE.
+     *
+     * The old active WorldSet becomes RETIRED.
+     *
+     * The identity and seed of the next standby attempt are
+     * persisted immediately, although its actual worlds are
+     * generated afterward.
+     *
+     * @return the previously active WorldSet
+     */
+    public synchronized WorldSet promoteStandby()
+        throws IOException {
+
+        if (standbyWorldSet == null) {
+            throw new IOException(
+                "Cannot rotate worlds because no standby WorldSet exists."
+            );
+        }
+
+        WorldSet previousActive =
+            activeWorldSet;
+
+        WorldSet promoted =
+            standbyWorldSet;
+
+        int nextStandbyAttempt =
+            promoted.attemptNumber() + 1;
+
+        long nextStandbySeed =
+            generateSeedDifferentFrom(
+                promoted.seed()
+            );
+
+        WorldRotationState nextState =
+            new WorldRotationState(
+                promoted.attemptNumber(),
+                promoted.seed(),
+                nextStandbyAttempt,
+                nextStandbySeed
+            );
+
+        /*
+         * Persist the pipeline before changing our
+         * in-memory references.
+         */
+        stateStore.save(
+            nextState
+        );
+
+        retiredWorldSet =
+            previousActive;
+
+        activeWorldSet =
+            promoted;
+
+        standbyWorldSet =
+            null;
+
+        plugin.getLogger().info(
+            "[Instigate Cafe Hardcore] "
+                + "Attempt #"
+                + activeWorldSet.attemptNumber()
+                + " promoted to ACTIVE."
+        );
+
+        return previousActive;
+    }
+
+    /**
+     * Generates the next standby WorldSet using the identity
+     * already persisted in world-state.properties.
+     */
+    public synchronized WorldSet createReplacementStandby()
+        throws IOException {
+
+        if (standbyWorldSet != null) {
+            return standbyWorldSet;
+        }
+
+        if (activeWorldSet == null) {
+            throw new IOException(
+                "Cannot create standby WorldSet without an active WorldSet."
+            );
+        }
+
+        WorldRotationState state =
+            stateStore.load();
+
+        if (
+            state.activeAttempt()
+                != activeWorldSet.attemptNumber()
+        ) {
+            throw new IOException(
+                "Persisted active attempt does not match "
+                    + "the in-memory active WorldSet."
+            );
+        }
+
+        if (
+            state.activeSeed()
+                != activeWorldSet.seed()
+        ) {
+            throw new IOException(
+                "Persisted active seed does not match "
+                    + "the in-memory active WorldSet."
+            );
+        }
+
+        plugin.getLogger().info(
+            "[Instigate Cafe Hardcore] "
+                + "Generating standby attempt #"
+                + state.standbyAttempt()
+                + "..."
+        );
+
+        standbyWorldSet =
+            createOrLoadWorldSet(
+                state.standbyAttempt(),
+                state.standbySeed()
+            );
+
+        plugin.getLogger().info(
+            "[Instigate Cafe Hardcore] "
+                + "Standby attempt #"
+                + standbyWorldSet.attemptNumber()
+                + " is ready."
+        );
+
+        return standbyWorldSet;
+    }
+
     private WorldSet createOrLoadWorldSet(
         int attemptNumber,
         long seed
@@ -175,10 +310,6 @@ public final class WorldSetManager {
             overworld
         );
 
-        /*
-         * Generate the central chunk of the secondary dimensions
-         * as well so their initial entry isn't completely cold.
-         */
         prepareCentralChunk(
             nether
         );
@@ -210,7 +341,9 @@ public final class WorldSetManager {
             );
 
         World existing =
-            Bukkit.getWorld(key);
+            Bukkit.getWorld(
+                key
+            );
 
         if (existing != null) {
             validateExistingWorld(
@@ -314,18 +447,21 @@ public final class WorldSetManager {
     private void configureWorld(
         World world
     ) {
-        world.setHardcore(true);
+        world.setHardcore(
+            true
+        );
+
         world.setDifficulty(
             Difficulty.HARD
         );
 
-        world.setAutoSave(true);
+        world.setAutoSave(
+            true
+        );
     }
 
     /**
-     * Generates a small area surrounding the Overworld spawn.
-     *
-     * Radius 1 means a 3x3 chunk area.
+     * Generates a small area surrounding Overworld spawn.
      */
     private void prepareSpawnArea(
         World world
@@ -357,12 +493,6 @@ public final class WorldSetManager {
                         + preloadRadiusChunks;
                 z++
             ) {
-                /*
-                 * getChunkAt(..., true) ensures the chunk exists.
-                 *
-                 * We do NOT add permanent chunk tickets; Paper may
-                 * unload these normally once nobody needs them.
-                 */
                 world.getChunkAt(
                     x,
                     z,
@@ -383,6 +513,23 @@ public final class WorldSetManager {
             spawn.getBlockZ() >> 4,
             true
         );
+    }
+
+    private long generateSeedDifferentFrom(
+        long activeSeed
+    ) {
+        long seed;
+
+        do {
+            seed =
+                ThreadLocalRandom
+                    .current()
+                    .nextLong();
+        } while (
+            seed == activeSeed
+        );
+
+        return seed;
     }
 
     private void logWorldState() {
@@ -424,10 +571,6 @@ public final class WorldSetManager {
                 + worldSet
                     .overworld()
                     .getKey()
-                + " | "
-                + worldSet
-                    .overworld()
-                    .getWorldFolder()
         );
 
         plugin.getLogger().info(
@@ -435,10 +578,6 @@ public final class WorldSetManager {
                 + worldSet
                     .nether()
                     .getKey()
-                + " | "
-                + worldSet
-                    .nether()
-                    .getWorldFolder()
         );
 
         plugin.getLogger().info(
@@ -446,40 +585,57 @@ public final class WorldSetManager {
                 + worldSet
                     .end()
                     .getKey()
-                + " | "
-                + worldSet
-                    .end()
-                    .getWorldFolder()
         );
     }
 
-    public World getLobbyWorld() {
+    public synchronized World getLobbyWorld() {
         return lobbyWorld;
     }
 
-    public WorldSet getActiveWorldSet() {
+    public synchronized WorldSet getActiveWorldSet() {
         return activeWorldSet;
     }
 
-    public WorldSet getStandbyWorldSet() {
+    public synchronized WorldSet getStandbyWorldSet() {
         return standbyWorldSet;
     }
 
-    public WorldStateStore getStateStore() {
+    public synchronized WorldSet getRetiredWorldSet() {
+        return retiredWorldSet;
+    }
+
+    public synchronized WorldStateStore getStateStore() {
         return stateStore;
     }
 
-    public boolean isActiveWorld(
+    public synchronized boolean hasStandbyWorldSet() {
+        return standbyWorldSet != null;
+    }
+
+    public synchronized boolean isActiveWorld(
         World world
     ) {
         return activeWorldSet != null
-            && activeWorldSet.contains(world);
+            && activeWorldSet.contains(
+                world
+            );
     }
 
-    public boolean isStandbyWorld(
+    public synchronized boolean isStandbyWorld(
         World world
     ) {
         return standbyWorldSet != null
-            && standbyWorldSet.contains(world);
+            && standbyWorldSet.contains(
+                world
+            );
+    }
+
+    public synchronized boolean isRetiredWorld(
+        World world
+    ) {
+        return retiredWorldSet != null
+            && retiredWorldSet.contains(
+                world
+            );
     }
 }

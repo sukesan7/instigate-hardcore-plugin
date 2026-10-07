@@ -5,6 +5,8 @@ import dev.instigatehardcore.countdown.CountdownManager;
 import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.stats.PlayerStats;
 import dev.instigatehardcore.stats.StatsManager;
+import dev.instigatehardcore.world.WorldRotationManager;
+import dev.instigatehardcore.world.WorldSetManager;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -25,44 +27,93 @@ public final class DeathListener implements Listener {
     private final StatsManager statsManager;
     private final CountdownManager countdownManager;
     private final PlayerResetManager playerResetManager;
+    private final WorldSetManager worldSetManager;
+    private final WorldRotationManager worldRotationManager;
 
     public DeathListener(
         JavaPlugin plugin,
         RunManager runManager,
         StatsManager statsManager,
         CountdownManager countdownManager,
-        PlayerResetManager playerResetManager
+        PlayerResetManager playerResetManager,
+        WorldSetManager worldSetManager,
+        WorldRotationManager worldRotationManager
     ) {
-        this.plugin = Objects.requireNonNull(plugin);
-        this.runManager = Objects.requireNonNull(runManager);
-        this.statsManager = Objects.requireNonNull(statsManager);
-        this.countdownManager = Objects.requireNonNull(countdownManager);
-        this.playerResetManager = Objects.requireNonNull(playerResetManager);
+        this.plugin =
+            Objects.requireNonNull(plugin);
+
+        this.runManager =
+            Objects.requireNonNull(runManager);
+
+        this.statsManager =
+            Objects.requireNonNull(statsManager);
+
+        this.countdownManager =
+            Objects.requireNonNull(
+                countdownManager
+            );
+
+        this.playerResetManager =
+            Objects.requireNonNull(
+                playerResetManager
+            );
+
+        this.worldSetManager =
+            Objects.requireNonNull(
+                worldSetManager
+            );
+
+        this.worldRotationManager =
+            Objects.requireNonNull(
+                worldRotationManager
+            );
     }
 
     @EventHandler
-    public void onPlayerDeath(PlayerDeathEvent event) {
-        Player player = event.getEntity();
+    public void onPlayerDeath(
+        PlayerDeathEvent event
+    ) {
+        Player player =
+            event.getEntity();
+
+        /*
+         * Only deaths occurring inside the currently ACTIVE
+         * attempt are relevant to the hardcore campaign.
+         */
+        if (
+            !worldSetManager.isActiveWorld(
+                player.getWorld()
+            )
+        ) {
+            plugin.getLogger().fine(
+                "Ignoring death of "
+                    + player.getName()
+                    + " outside the active WorldSet."
+            );
+
+            return;
+        }
 
         /*
          * Preserve Minecraft's generated death message before
-         * suppressing the normal broadcast.
+         * suppressing the vanilla broadcast.
          */
-        Component deathMessage = event.deathMessage();
+        Component deathMessage =
+            event.deathMessage();
 
         /*
-         * Only the first death during an ACTIVE run may end
-         * the current hardcore attempt.
+         * Only the first death while ACTIVE may end the run.
          */
         if (!runManager.beginEnding()) {
-            /*
-             * The run is already ending/resetting.
-             *
-             * Suppress additional death spam during the transition.
-             */
-            event.deathMessage(null);
+            event.deathMessage(
+                null
+            );
+
             event.getDrops().clear();
-            event.setDroppedExp(0);
+
+            event.setDroppedExp(
+                0
+            );
 
             plugin.getLogger().fine(
                 "Ignoring death of "
@@ -75,24 +126,28 @@ public final class DeathListener implements Listener {
         }
 
         /*
-         * The attempt has ended.
-         *
-         * Replace Minecraft's normal death handling presentation
-         * with the Instigate Cafe Hardcore flow.
+         * The attempt has now officially ended.
          */
-        event.deathMessage(null);
+        event.deathMessage(
+            null
+        );
 
         /*
          * Nothing from the failed attempt should remain useful.
          */
         event.getDrops().clear();
-        event.setDroppedExp(0);
+
+        event.setDroppedExp(
+            0
+        );
 
         int attemptNumber =
             statsManager.getCurrentAttempt();
 
         PlayerStats playerStats =
-            recordDeath(player);
+            recordDeath(
+                player
+            );
 
         plugin.getLogger().info(
             "[Instigate Cafe Hardcore] "
@@ -110,22 +165,17 @@ public final class DeathListener implements Listener {
         );
 
         /*
-         * Immediately transition all players out of normal gameplay.
-         *
-         * Inventories, Ender Chests, XP, potion effects and other
-         * per-attempt state are cleared. Survivors become spectators.
-         *
-         * The player who actually died will be respawned on the next
-         * safe tick and then placed into spectator mode too.
+         * Clear failed-attempt state and move everyone into
+         * spectator mode while the countdown runs.
          */
-        playerResetManager.beginCountdownPhase();
+        playerResetManager
+            .beginCountdownPhase();
 
-        startCountdown(attemptNumber);
+        startCountdown(
+            attemptNumber
+        );
     }
 
-    /**
-     * Records the run-ending death in persistent campaign statistics.
-     */
     private PlayerStats recordDeath(
         Player player
     ) {
@@ -134,7 +184,9 @@ public final class DeathListener implements Listener {
                 player.getUniqueId(),
                 player.getName()
             );
-        } catch (IOException exception) {
+        } catch (
+            IOException exception
+        ) {
             plugin.getLogger().severe(
                 "Failed to persist death statistics for "
                     + player.getName()
@@ -143,9 +195,6 @@ public final class DeathListener implements Listener {
 
             exception.printStackTrace();
 
-            /*
-             * Continue the run-ending flow even if persistence fails.
-             */
             return new PlayerStats(
                 player.getUniqueId(),
                 player.getName(),
@@ -156,9 +205,6 @@ public final class DeathListener implements Listener {
         }
     }
 
-    /**
-     * Starts the configured reset countdown.
-     */
     private void startCountdown(
         int attemptNumber
     ) {
@@ -177,9 +223,8 @@ public final class DeathListener implements Listener {
     }
 
     /**
-     * Runs once the countdown reaches zero.
-     *
-     * Phase 6C will eventually trigger seamless world rotation here.
+     * Once the countdown reaches zero, transition into
+     * RESETTING and promote the prepared standby world.
      */
     private void onCountdownComplete() {
         if (!runManager.beginResetting()) {
@@ -194,26 +239,21 @@ public final class DeathListener implements Listener {
 
         plugin.getLogger().info(
             "[Instigate Cafe Hardcore] "
-                + "Countdown completed. "
-                + "Waiting for seamless world rotation."
+                + "Beginning seamless world rotation."
         );
 
-        /*
-         * Temporary Phase 6A behavior:
-         *
-         * Everyone remains connected and in spectator mode.
-         *
-         * Phase 6C will replace this block with something like:
-         *
-         *     worldRotationManager.rotateToStandbyWorld();
-         *
-         * No server shutdown or disconnect occurs.
-         */
+        boolean rotated =
+            worldRotationManager
+                .rotateToStandby();
+
+        if (!rotated) {
+            plugin.getLogger().severe(
+                "[Instigate Cafe Hardcore] "
+                    + "Seamless world rotation did not complete."
+            );
+        }
     }
 
-    /**
-     * Broadcasts the branded run-ending message.
-     */
     private void announceRunEnd(
         Player player,
         Component deathMessage,
@@ -242,7 +282,8 @@ public final class DeathListener implements Listener {
 
         Component fallbackDeathMessage =
             Component.text(
-                player.getName() + " died.",
+                player.getName()
+                    + " died.",
                 NamedTextColor.WHITE
             );
 
@@ -260,10 +301,11 @@ public final class DeathListener implements Listener {
                 NamedTextColor.GRAY
             );
 
-        Component resetMessage =
+        Component nextAttemptMessage =
             Component.text(
                 "Next attempt in "
-                    + countdownManager.getDurationSeconds()
+                    + countdownManager
+                        .getDurationSeconds()
                     + " seconds...",
                 NamedTextColor.GRAY
             );
@@ -303,7 +345,7 @@ public final class DeathListener implements Listener {
         );
 
         plugin.getServer().broadcast(
-            resetMessage
+            nextAttemptMessage
         );
 
         plugin.getServer().broadcast(

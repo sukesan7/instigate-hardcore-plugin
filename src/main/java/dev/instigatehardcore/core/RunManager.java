@@ -14,10 +14,9 @@ public final class RunManager {
     }
 
     /**
-     * Marks the current run as active.
+     * Starts the initial hardcore run.
      *
-     * @return true if the run was started, false if it was already
-     *         in another state.
+     * STARTING -> ACTIVE
      */
     public synchronized boolean startRun() {
         if (state != RunState.STARTING) {
@@ -26,17 +25,18 @@ public final class RunManager {
 
         startedAt = Instant.now();
         endedAt = null;
+
         state = RunState.ACTIVE;
 
         return true;
     }
 
     /**
-     * Attempts to end the current run.
+     * Ends the currently active run.
      *
      * Only the first caller while ACTIVE succeeds.
      *
-     * @return true if this call ended the run.
+     * ACTIVE -> ENDING
      */
     public synchronized boolean beginEnding() {
         if (state != RunState.ACTIVE) {
@@ -44,15 +44,16 @@ public final class RunManager {
         }
 
         endedAt = Instant.now();
+
         state = RunState.ENDING;
 
         return true;
     }
 
     /**
-     * Marks the run as being reset.
+     * Begins the world-transition phase.
      *
-     * @return true if the state transitioned from ENDING to RESETTING.
+     * ENDING -> RESETTING
      */
     public synchronized boolean beginResetting() {
         if (state != RunState.ENDING) {
@@ -60,6 +61,25 @@ public final class RunManager {
         }
 
         state = RunState.RESETTING;
+
+        return true;
+    }
+
+    /**
+     * Starts the next hardcore attempt after a successful
+     * seamless world rotation.
+     *
+     * RESETTING -> ACTIVE
+     */
+    public synchronized boolean beginNextRun() {
+        if (state != RunState.RESETTING) {
+            return false;
+        }
+
+        startedAt = Instant.now();
+        endedAt = null;
+
+        state = RunState.ACTIVE;
 
         return true;
     }
@@ -81,8 +101,7 @@ public final class RunManager {
     }
 
     /**
-     * Returns true once the run has left the ACTIVE state
-     * because of a run-ending death.
+     * Returns true once the current attempt has ended.
      */
     public synchronized boolean hasEnded() {
         return state == RunState.ENDING
@@ -98,34 +117,33 @@ public final class RunManager {
     }
 
     /**
-     * Returns elapsed play time for the current run.
+     * Returns elapsed gameplay time.
      *
      * While ACTIVE:
      *     startedAt -> now
      *
-     * Once the run ends:
+     * Once the attempt ends:
      *     startedAt -> endedAt
      *
-     * This prevents the timer from continuing during the reset countdown.
+     * This freezes the timer during the countdown and world
+     * transition.
      */
     public synchronized Duration getElapsedTime() {
         if (startedAt == null) {
             return Duration.ZERO;
         }
 
-        Instant end = endedAt != null
-            ? endedAt
-            : Instant.now();
+        Instant end =
+            endedAt != null
+                ? endedAt
+                : Instant.now();
 
-        Duration duration = Duration.between(
-            startedAt,
-            end
-        );
+        Duration duration =
+            Duration.between(
+                startedAt,
+                end
+            );
 
-        /*
-         * Defensive safeguard against clock adjustments producing
-         * a negative duration.
-         */
         if (duration.isNegative()) {
             return Duration.ZERO;
         }
