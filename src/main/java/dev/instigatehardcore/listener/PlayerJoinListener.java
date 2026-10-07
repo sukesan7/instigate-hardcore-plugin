@@ -2,6 +2,7 @@ package dev.instigatehardcore.listener;
 
 import dev.instigatehardcore.core.RunManager;
 
+import dev.instigatehardcore.participation.AttemptAdmissionPolicy;
 import dev.instigatehardcore.participation.AttemptParticipantManager;
 
 import dev.instigatehardcore.player.PlayerResetManager;
@@ -73,7 +74,7 @@ public final class PlayerJoinListener implements Listener {
     private final AttemptParticipantManager participantManager;
     private final PlayerTelemetryManager telemetryManager;
 
-    private final boolean allowLateJoiners;
+    private final AttemptAdmissionPolicy admissionPolicy;
 
     public PlayerJoinListener(
         JavaPlugin plugin,
@@ -127,8 +128,10 @@ public final class PlayerJoinListener implements Listener {
                 telemetryManager
             );
 
-        this.allowLateJoiners =
-            allowLateJoiners;
+        this.admissionPolicy =
+            new AttemptAdmissionPolicy(
+                allowLateJoiners
+            );
     }
 
     /*
@@ -232,7 +235,6 @@ public final class PlayerJoinListener implements Listener {
         if (
             !mayEnterCurrentAttempt(
                 attempt,
-                player,
                 existingParticipant
             )
         ) {
@@ -301,7 +303,7 @@ public final class PlayerJoinListener implements Listener {
         /*
          * If rotation completed while we were verifying login,
          * evaluate the player against the newly-active attempt
-         * instead of forcing them back into an obsolete one.
+         * instead of forcing them into an obsolete attempt.
          */
         if (
             currentAttempt
@@ -404,9 +406,8 @@ public final class PlayerJoinListener implements Listener {
         /*
          * Even after a successful first placement, verify it again.
          *
-         * This is the important Phase 8B change: we no longer
-         * assume the first teleport/gamemode assignment survives
-         * the rest of Paper's login restoration.
+         * We do not assume the first teleport/gamemode assignment
+         * survives the rest of Paper's login restoration.
          */
         if (
             verificationAttempt
@@ -566,15 +567,9 @@ public final class PlayerJoinListener implements Listener {
                     player.getUniqueId()
                 );
 
-        /*
-         * If late joining was disabled after this player was
-         * admitted, an already-recorded participant still has the
-         * right to re-enter.
-         */
         if (
             !mayEnterCurrentAttempt(
                 expectedAttempt,
-                player,
                 existingParticipant
             )
         ) {
@@ -607,11 +602,11 @@ public final class PlayerJoinListener implements Listener {
             );
 
             /*
-             * We intentionally continue verification until the
-             * short verification window has finished.
+             * Continue verification until the short verification
+             * window has finished.
              *
-             * If Paper changes the player's location or gamemode
-             * after this tick, a later pass will repair it.
+             * If Paper changes location or gamemode after this
+             * tick, a later pass repairs it.
              */
             if (
                 verificationAttempt
@@ -631,10 +626,11 @@ public final class PlayerJoinListener implements Listener {
 
         /*
          * Something restored the player outside ACTIVE.
+         *
          * Correct it.
          *
-         * If the player has already been recorded as a participant,
-         * never wipe them again.
+         * If the player has already been recorded as a
+         * participant, never wipe them again.
          */
         boolean shouldFreshReset =
             needsFreshReset
@@ -700,35 +696,15 @@ public final class PlayerJoinListener implements Listener {
 
     private boolean mayEnterCurrentAttempt(
         int attempt,
-        Player player,
         boolean existingParticipant
     ) {
-        /*
-         * Rejoining your own attempt is never a late join.
-         */
-        if (existingParticipant) {
-            return true;
-        }
-
-        /*
-         * New participants are allowed when configured.
-         */
-        if (allowLateJoiners) {
-            return true;
-        }
-
-        /*
-         * Bootstrap protection.
-         *
-         * A completely empty ACTIVE attempt must allow its first
-         * participant or a fresh server could deadlock with every
-         * player stuck in the lobby.
-         */
-        return participantManager
-            .getParticipantCount(
-                attempt
-            )
-            == 0;
+        return admissionPolicy.mayEnter(
+            existingParticipant,
+            participantManager
+                .getParticipantCount(
+                    attempt
+                )
+        );
     }
 
     private void notifyLateJoinBlocked(
