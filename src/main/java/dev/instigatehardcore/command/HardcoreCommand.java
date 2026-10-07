@@ -3,7 +3,10 @@ package dev.instigatehardcore.command;
 import dev.instigatehardcore.core.RunManager;
 import dev.instigatehardcore.participation.AttemptParticipant;
 import dev.instigatehardcore.participation.AttemptParticipantManager;
+import dev.instigatehardcore.stats.PlayerStats;
 import dev.instigatehardcore.stats.StatsManager;
+import dev.instigatehardcore.telemetry.PlayerDeathRecord;
+import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
 import dev.instigatehardcore.world.WorldCleanupManager;
 import dev.instigatehardcore.world.WorldRotationManager;
 import dev.instigatehardcore.world.WorldSet;
@@ -14,17 +17,18 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 
 import org.bukkit.Bukkit;
-import org.bukkit.entity.Player;
-
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
 
 import java.time.Duration;
-
+import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 
 public final class HardcoreCommand
     implements CommandExecutor {
@@ -33,6 +37,7 @@ public final class HardcoreCommand
     private final StatsManager statsManager;
 
     private final AttemptParticipantManager participantManager;
+    private final PlayerTelemetryManager telemetryManager;
 
     private final WorldSetManager worldSetManager;
     private final WorldRotationManager worldRotationManager;
@@ -42,6 +47,7 @@ public final class HardcoreCommand
         RunManager runManager,
         StatsManager statsManager,
         AttemptParticipantManager participantManager,
+        PlayerTelemetryManager telemetryManager,
         WorldSetManager worldSetManager,
         WorldRotationManager worldRotationManager,
         WorldCleanupManager worldCleanupManager
@@ -59,6 +65,11 @@ public final class HardcoreCommand
         this.participantManager =
             Objects.requireNonNull(
                 participantManager
+            );
+
+        this.telemetryManager =
+            Objects.requireNonNull(
+                telemetryManager
             );
 
         this.worldSetManager =
@@ -115,18 +126,17 @@ public final class HardcoreCommand
             }
 
             case "stats" -> {
-                sendNotImplemented(
+                handleStats(
                     sender,
-                    "stats"
+                    args
                 );
 
                 yield true;
             }
 
             case "deaths" -> {
-                sendNotImplemented(
-                    sender,
-                    "deaths"
+                sendDeaths(
+                    sender
                 );
 
                 yield true;
@@ -206,6 +216,549 @@ public final class HardcoreCommand
         };
     }
 
+    private void handleStats(
+        CommandSender sender,
+        String[] args
+    ) {
+        if (args.length == 1) {
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage(
+                    Component.text(
+                        "Console must specify a player: /hc stats <player>",
+                        NamedTextColor.RED
+                    )
+                );
+
+                return;
+            }
+
+            sendPlayerStats(
+                sender,
+                player.getUniqueId(),
+                player.getName()
+            );
+
+            return;
+        }
+
+        if (args.length > 2) {
+            sender.sendMessage(
+                Component.text(
+                    "Usage: /hc stats [player]",
+                    NamedTextColor.RED
+                )
+            );
+
+            return;
+        }
+
+        Optional<PlayerStats> target =
+            findPlayerStats(
+                args[1]
+            );
+
+        if (target.isEmpty()) {
+            sender.sendMessage(
+                Component.text()
+                    .append(
+                        Component.text(
+                            "No hardcore statistics found for ",
+                            NamedTextColor.RED
+                        )
+                    )
+                    .append(
+                        Component.text(
+                            args[1],
+                            NamedTextColor.WHITE
+                        )
+                    )
+                    .append(
+                        Component.text(
+                            ".",
+                            NamedTextColor.RED
+                        )
+                    )
+                    .build()
+            );
+
+            return;
+        }
+
+        PlayerStats stats =
+            target.get();
+
+        sendPlayerStats(
+            sender,
+            stats.uuid(),
+            stats.name()
+        );
+    }
+
+    private Optional<PlayerStats> findPlayerStats(
+        String name
+    ) {
+        return statsManager
+            .getPlayersByDeaths()
+            .stream()
+            .filter(
+                stats ->
+                    stats.name()
+                        .equalsIgnoreCase(
+                            name
+                        )
+            )
+            .findFirst();
+    }
+
+    private void sendPlayerStats(
+        CommandSender sender,
+        UUID uuid,
+        String name
+    ) {
+        int deaths =
+            statsManager.getDeaths(
+                uuid
+            );
+
+        int attemptsPlayed =
+            participantManager
+                .getAttemptsPlayed(
+                    uuid
+                );
+
+        long totalPlaytimeMillis =
+            telemetryManager
+                .getTotalPlaytimeMillis(
+                    uuid
+                );
+
+        long averagePlaytimeMillis =
+            attemptsPlayed == 0
+                ? 0L
+                : totalPlaytimeMillis
+                    / attemptsPlayed;
+
+        Optional<String> mostCommonCause =
+            telemetryManager
+                .getMostCommonDeathCause(
+                    uuid
+                );
+
+        List<PlayerDeathRecord> latestDeaths =
+            telemetryManager
+                .getLatestDeaths(
+                    uuid,
+                    3
+                );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            divider()
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "INSTIGATE CAFE HARDCORE",
+                NamedTextColor.GOLD
+            ).decorate(
+                TextDecoration.BOLD
+            )
+        );
+
+        sender.sendMessage(
+            Component.text(
+                name + " — PLAYER STATS",
+                NamedTextColor.RED
+            )
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sendStatusEntry(
+            sender,
+            "Deaths",
+            Integer.toString(
+                deaths
+            ),
+            deaths > 0
+                ? NamedTextColor.RED
+                : NamedTextColor.GREEN
+        );
+
+        sendStatusEntry(
+            sender,
+            "Attempts Played",
+            Integer.toString(
+                attemptsPlayed
+            ),
+            NamedTextColor.WHITE
+        );
+
+        sendStatusEntry(
+            sender,
+            "Total Playtime",
+            formatPlaytime(
+                totalPlaytimeMillis
+            ),
+            NamedTextColor.WHITE
+        );
+
+        sendStatusEntry(
+            sender,
+            "Average Attempt",
+            formatPlaytime(
+                averagePlaytimeMillis
+            ),
+            NamedTextColor.WHITE
+        );
+
+        if (mostCommonCause.isPresent()) {
+            String cause =
+                mostCommonCause.get();
+
+            long count =
+                telemetryManager
+                    .getDeathCauseCount(
+                        uuid,
+                        cause
+                    );
+
+            sendStatusEntry(
+                sender,
+                "Most Killed By",
+                cause
+                    + " ("
+                    + count
+                    + ")",
+                NamedTextColor.RED
+            );
+        } else {
+            sendStatusEntry(
+                sender,
+                "Most Killed By",
+                "None",
+                NamedTextColor.GRAY
+            );
+        }
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "LATEST DEATHS",
+                NamedTextColor.GOLD
+            ).decorate(
+                TextDecoration.BOLD
+            )
+        );
+
+        if (latestDeaths.isEmpty()) {
+            sender.sendMessage(
+                Component.text(
+                    "No recorded deaths.",
+                    NamedTextColor.DARK_GRAY
+                )
+            );
+        } else {
+            for (
+                PlayerDeathRecord death :
+                latestDeaths
+            ) {
+                sender.sendMessage(
+                    Component.text()
+                        .append(
+                            Component.text(
+                                "#"
+                                    + death.attempt(),
+                                NamedTextColor.GOLD
+                            )
+                        )
+                        .append(
+                            Component.text(
+                                "  ",
+                                NamedTextColor.DARK_GRAY
+                            )
+                        )
+                        .append(
+                            Component.text(
+                                death.cause(),
+                                NamedTextColor.RED
+                            )
+                        )
+                        .append(
+                            Component.text(
+                                "  •  ",
+                                NamedTextColor.DARK_GRAY
+                            )
+                        )
+                        .append(
+                            Component.text(
+                                formatRelativeTime(
+                                    death.timestamp()
+                                ),
+                                NamedTextColor.GRAY
+                            )
+                        )
+                        .build()
+                );
+
+                /*
+                 * Keep the original vanilla-style message visible
+                 * beneath each death.
+                 */
+                sender.sendMessage(
+                    Component.text(
+                        "   "
+                            + death.message(),
+                        NamedTextColor.DARK_GRAY
+                    )
+                );
+            }
+        }
+
+        sender.sendMessage(
+            divider()
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+    }
+
+    private void sendDeaths(
+        CommandSender sender
+    ) {
+        List<PlayerStats> leaderboard =
+            statsManager
+                .getPlayersByDeaths();
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            divider()
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "INSTIGATE CAFE HARDCORE",
+                NamedTextColor.GOLD
+            ).decorate(
+                TextDecoration.BOLD
+            )
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "DEATH LEADERBOARD",
+                NamedTextColor.RED
+            )
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        if (leaderboard.isEmpty()) {
+            sender.sendMessage(
+                Component.text(
+                    "No players have been recorded yet.",
+                    NamedTextColor.DARK_GRAY
+                )
+            );
+        } else {
+            int rank = 1;
+
+            for (
+                PlayerStats player :
+                leaderboard
+            ) {
+                sendDeathLeaderboardEntry(
+                    sender,
+                    rank,
+                    player
+                );
+
+                rank++;
+            }
+        }
+
+        sender.sendMessage(
+            Component.empty()
+        );
+
+        sender.sendMessage(
+            Component.text(
+                "Current Attempt: #"
+                    + statsManager
+                        .getCurrentAttempt(),
+                NamedTextColor.GRAY
+            )
+        );
+
+        sender.sendMessage(
+            divider()
+        );
+
+        sender.sendMessage(
+            Component.empty()
+        );
+    }
+
+    private void sendDeathLeaderboardEntry(
+        CommandSender sender,
+        int rank,
+        PlayerStats player
+    ) {
+        int deaths =
+            player.deaths();
+
+        sender.sendMessage(
+            Component.text()
+                .append(
+                    Component.text(
+                        rank + ". ",
+                        NamedTextColor.GOLD
+                    )
+                )
+                .append(
+                    Component.text(
+                        player.name(),
+                        NamedTextColor.WHITE
+                    )
+                )
+                .append(
+                    Component.text(
+                        "  •  ",
+                        NamedTextColor.DARK_GRAY
+                    )
+                )
+                .append(
+                    Component.text(
+                        deaths
+                            + " death"
+                            + (
+                                deaths == 1
+                                    ? ""
+                                    : "s"
+                            ),
+                        deaths > 0
+                            ? NamedTextColor.RED
+                            : NamedTextColor.GRAY
+                    )
+                )
+                .build()
+        );
+
+        if (deaths <= 0) {
+            return;
+        }
+
+        Optional<String> mostCommon =
+            telemetryManager
+                .getMostCommonDeathCause(
+                    player.uuid()
+                );
+
+        List<PlayerDeathRecord> latest =
+            telemetryManager
+                .getLatestDeaths(
+                    player.uuid(),
+                    1
+                );
+
+        Component details =
+            Component.text(
+                "   ",
+                NamedTextColor.DARK_GRAY
+            );
+
+        boolean hasDetails =
+            false;
+
+        if (mostCommon.isPresent()) {
+            String cause =
+                mostCommon.get();
+
+            long count =
+                telemetryManager
+                    .getDeathCauseCount(
+                        player.uuid(),
+                        cause
+                    );
+
+            details =
+                details.append(
+                    Component.text(
+                        "Most: ",
+                        NamedTextColor.DARK_GRAY
+                    )
+                );
+
+            details =
+                details.append(
+                    Component.text(
+                        cause
+                            + " ("
+                            + count
+                            + ")",
+                        NamedTextColor.GRAY
+                    )
+                );
+
+            hasDetails =
+                true;
+        }
+
+        if (!latest.isEmpty()) {
+            if (hasDetails) {
+                details =
+                    details.append(
+                        Component.text(
+                            "  •  ",
+                            NamedTextColor.DARK_GRAY
+                        )
+                    );
+            }
+
+            details =
+                details.append(
+                    Component.text(
+                        "Latest: ",
+                        NamedTextColor.DARK_GRAY
+                    )
+                );
+
+            details =
+                details.append(
+                    Component.text(
+                        "Attempt #"
+                            + latest
+                                .getFirst()
+                                .attempt(),
+                        NamedTextColor.GRAY
+                    )
+                );
+
+            hasDetails =
+                true;
+        }
+
+        if (hasDetails) {
+            sender.sendMessage(
+                details
+            );
+        }
+    }
+
     private void sendStatus(
         CommandSender sender
     ) {
@@ -234,15 +787,12 @@ public final class HardcoreCommand
             worldSetManager
                 .getStandbyWorldSet();
 
-        Component divider =
-            divider();
-
         sender.sendMessage(
             Component.empty()
         );
 
         sender.sendMessage(
-            divider
+            divider()
         );
 
         sender.sendMessage(
@@ -268,8 +818,7 @@ public final class HardcoreCommand
         sendStatusEntry(
             sender,
             "Attempt",
-            "#"
-                + attempt,
+            "#" + attempt,
             NamedTextColor.GOLD
         );
 
@@ -401,7 +950,7 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            divider
+            divider()
         );
 
         sender.sendMessage(
@@ -437,7 +986,6 @@ public final class HardcoreCommand
                     : NamedTextColor.GRAY;
 
         String state;
-
         NamedTextColor stateColor;
 
         if (active) {
@@ -500,28 +1048,82 @@ public final class HardcoreCommand
                 );
     }
 
-    private void sendStatusEntry(
-        CommandSender sender,
-        String label,
-        String value,
-        NamedTextColor valueColor
+    private String formatPlaytime(
+        long milliseconds
     ) {
-        sender.sendMessage(
-            Component.text()
-                .append(
-                    Component.text(
-                        label + "  ",
-                        NamedTextColor.GRAY
-                    )
-                )
-                .append(
-                    Component.text(
-                        value,
-                        valueColor
-                    )
-                )
-                .build()
-        );
+        long totalSeconds =
+            Math.max(
+                0L,
+                milliseconds / 1000L
+            );
+
+        long hours =
+            totalSeconds / 3600L;
+
+        long minutes =
+            (
+                totalSeconds % 3600L
+            ) / 60L;
+
+        long seconds =
+            totalSeconds % 60L;
+
+        if (hours > 0) {
+            return String.format(
+                "%dh %02dm %02ds",
+                hours,
+                minutes,
+                seconds
+            );
+        }
+
+        if (minutes > 0) {
+            return String.format(
+                "%dm %02ds",
+                minutes,
+                seconds
+            );
+        }
+
+        return seconds + "s";
+    }
+
+    private String formatRelativeTime(
+        long timestamp
+    ) {
+        long seconds =
+            Math.max(
+                0L,
+                Duration.between(
+                    Instant.ofEpochMilli(
+                        timestamp
+                    ),
+                    Instant.now()
+                ).getSeconds()
+            );
+
+        if (seconds < 60) {
+            return seconds + "s ago";
+        }
+
+        long minutes =
+            seconds / 60;
+
+        if (minutes < 60) {
+            return minutes + "m ago";
+        }
+
+        long hours =
+            minutes / 60;
+
+        if (hours < 24) {
+            return hours + "h ago";
+        }
+
+        long days =
+            hours / 24;
+
+        return days + "d ago";
     }
 
     private String formatDuration(
@@ -552,18 +1154,39 @@ public final class HardcoreCommand
         );
     }
 
+    private void sendStatusEntry(
+        CommandSender sender,
+        String label,
+        String value,
+        NamedTextColor valueColor
+    ) {
+        sender.sendMessage(
+            Component.text()
+                .append(
+                    Component.text(
+                        label + "  ",
+                        NamedTextColor.GRAY
+                    )
+                )
+                .append(
+                    Component.text(
+                        value,
+                        valueColor
+                    )
+                )
+                .build()
+        );
+    }
+
     private void sendHelp(
         CommandSender sender
     ) {
-        Component divider =
-            divider();
-
         sender.sendMessage(
             Component.empty()
         );
 
         sender.sendMessage(
-            divider
+            divider()
         );
 
         sender.sendMessage(
@@ -671,7 +1294,7 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            divider
+            divider()
         );
 
         sender.sendMessage(

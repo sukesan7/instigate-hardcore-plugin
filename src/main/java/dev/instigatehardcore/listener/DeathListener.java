@@ -3,30 +3,47 @@ package dev.instigatehardcore.listener;
 import dev.instigatehardcore.core.RunManager;
 import dev.instigatehardcore.countdown.CountdownManager;
 import dev.instigatehardcore.player.PlayerResetManager;
-import dev.instigatehardcore.stats.PlayerStats;
 import dev.instigatehardcore.stats.StatsManager;
+import dev.instigatehardcore.telemetry.PlayerDeathRecord;
+import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
 import dev.instigatehardcore.world.WorldRotationManager;
 import dev.instigatehardcore.world.WorldSetManager;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Projectile;
+
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.projectiles.ProjectileSource;
 
 import java.io.IOException;
+import java.util.Locale;
 import java.util.Objects;
 
 public final class DeathListener implements Listener {
 
     private final JavaPlugin plugin;
+
     private final RunManager runManager;
     private final StatsManager statsManager;
+    private final PlayerTelemetryManager telemetryManager;
+
     private final CountdownManager countdownManager;
     private final PlayerResetManager playerResetManager;
+
     private final WorldSetManager worldSetManager;
     private final WorldRotationManager worldRotationManager;
 
@@ -34,6 +51,7 @@ public final class DeathListener implements Listener {
         JavaPlugin plugin,
         RunManager runManager,
         StatsManager statsManager,
+        PlayerTelemetryManager telemetryManager,
         CountdownManager countdownManager,
         PlayerResetManager playerResetManager,
         WorldSetManager worldSetManager,
@@ -47,6 +65,11 @@ public final class DeathListener implements Listener {
 
         this.statsManager =
             Objects.requireNonNull(statsManager);
+
+        this.telemetryManager =
+            Objects.requireNonNull(
+                telemetryManager
+            );
 
         this.countdownManager =
             Objects.requireNonNull(
@@ -69,7 +92,9 @@ public final class DeathListener implements Listener {
             );
     }
 
-    @EventHandler
+    @EventHandler(
+        priority = EventPriority.HIGHEST
+    )
     public void onPlayerDeath(
         PlayerDeathEvent event
     ) {
@@ -77,113 +102,93 @@ public final class DeathListener implements Listener {
             event.getEntity();
 
         /*
-         * Only deaths occurring inside the currently ACTIVE
-         * attempt are relevant to the hardcore campaign.
+         * Deaths outside the current ACTIVE WorldSet do not affect
+         * the hardcore campaign.
          */
         if (
             !worldSetManager.isActiveWorld(
                 player.getWorld()
             )
         ) {
-            plugin.getLogger().fine(
-                "Ignoring death of "
-                    + player.getName()
-                    + " outside the active WorldSet."
-            );
-
             return;
         }
 
-        /*
-         * Preserve Minecraft's generated death message before
-         * suppressing the vanilla broadcast.
-         */
-        Component deathMessage =
+        Component originalDeathComponent =
             event.deathMessage();
 
-        /*
-         * Only the first death while ACTIVE may end the run.
-         */
-        if (!runManager.beginEnding()) {
-            event.deathMessage(
-                null
-            );
+        String deathMessage =
+            originalDeathComponent == null
+                ? player.getName() + " died"
+                : PlainTextComponentSerializer
+                    .plainText()
+                    .serialize(
+                        originalDeathComponent
+                    );
 
-            event.getDrops().clear();
-
-            event.setDroppedExp(
-                0
-            );
-
-            plugin.getLogger().fine(
-                "Ignoring death of "
-                    + player.getName()
-                    + " because run state is "
-                    + runManager.getState()
-            );
-
-            return;
-        }
-
-        /*
-         * The attempt has now officially ended.
-         */
-        event.deathMessage(
-            null
-        );
-
-        /*
-         * Nothing from the failed attempt should remain useful.
-         */
-        event.getDrops().clear();
-
-        event.setDroppedExp(
-            0
-        );
-
-        int attemptNumber =
-            statsManager.getCurrentAttempt();
-
-        PlayerStats playerStats =
-            recordDeath(
+        String deathCause =
+            determineDeathCause(
                 player
             );
 
-        plugin.getLogger().info(
-            "[Instigate Cafe Hardcore] "
-                + player.getName()
-                + " ended attempt #"
-                + attemptNumber
-                + "."
-        );
-
-        announceRunEnd(
-            player,
-            deathMessage,
-            attemptNumber,
-            playerStats
+        /*
+         * Suppress vanilla death output/drops immediately.
+         */
+        suppressVanillaDeath(
+            event
         );
 
         /*
-         * Clear failed-attempt state and move everyone into
-         * spectator mode while the countdown runs.
+         * Once ENDING has begun, any additional deaths are ignored
+         * for persistent statistics and attempt progression.
          */
-        playerResetManager
-            .beginCountdownPhase();
+        if (!runManager.isActive()) {
+            return;
+        }
 
-        startCountdown(
-            attemptNumber
-        );
-    }
+        if (!runManager.beginEnding()) {
+            return;
+        }
 
-    private PlayerStats recordDeath(
-        Player player
-    ) {
+        int attempt =
+            statsManager
+                .getCurrentAttempt();
+
+        /*
+         * Gameplay stops at the first fatal event, so stop every
+         * ACTIVE playtime session before the countdown begins.
+         */
         try {
-            return statsManager.recordDeath(
+            telemetryManager
+                .endAttemptSessions(
+                    attempt
+                );
+        } catch (
+            IOException exception
+        ) {
+            plugin.getLogger().severe(
+                "Failed to persist playtime when attempt #"
+                    + attempt
+                    + " ended."
+            );
+
+            exception.printStackTrace();
+        }
+
+        int totalDeaths =
+            statsManager.getDeaths(
+                player.getUniqueId()
+            );
+
+        try {
+            statsManager.recordDeath(
                 player.getUniqueId(),
                 player.getName()
             );
+
+            totalDeaths =
+                statsManager.getDeaths(
+                    player.getUniqueId()
+                );
         } catch (
             IOException exception
         ) {
@@ -194,166 +199,274 @@ public final class DeathListener implements Listener {
             );
 
             exception.printStackTrace();
+        }
 
-            return new PlayerStats(
+        try {
+            telemetryManager.recordDeath(
                 player.getUniqueId(),
                 player.getName(),
-                statsManager.getDeaths(
-                    player.getUniqueId()
+                new PlayerDeathRecord(
+                    attempt,
+                    System.currentTimeMillis(),
+                    deathCause,
+                    deathMessage
                 )
             );
-        }
-    }
-
-    private void startCountdown(
-        int attemptNumber
-    ) {
-        boolean started =
-            countdownManager.startCountdown(
-                attemptNumber,
-                this::onCountdownComplete
-            );
-
-        if (!started) {
-            plugin.getLogger().warning(
-                "[Instigate Cafe Hardcore] "
-                    + "Attempted to start a second reset countdown."
-            );
-        }
-    }
-
-    /**
-     * Once the countdown reaches zero, transition into
-     * RESETTING and promote the prepared standby world.
-     */
-    private void onCountdownComplete() {
-        if (!runManager.beginResetting()) {
+        } catch (
+            IOException exception
+        ) {
             plugin.getLogger().severe(
-                "[Instigate Cafe Hardcore] "
-                    + "Countdown completed but run state could "
-                    + "not transition to RESETTING."
+                "Failed to persist structured death telemetry for "
+                    + player.getName()
+                    + "."
             );
 
-            return;
+            exception.printStackTrace();
         }
 
-        plugin.getLogger().info(
-            "[Instigate Cafe Hardcore] "
-                + "Beginning seamless world rotation."
+        announceAttemptDeath(
+            player,
+            attempt,
+            totalDeaths,
+            deathMessage
         );
 
-        boolean rotated =
-            worldRotationManager
-                .rotateToStandby();
+        /*
+         * Clears attempt state and makes everybody spectator for
+         * the reset countdown.
+         */
+        playerResetManager
+            .beginCountdownPhase();
 
-        if (!rotated) {
-            plugin.getLogger().severe(
-                "[Instigate Cafe Hardcore] "
-                    + "Seamless world rotation did not complete."
-            );
-        }
+        countdownManager.startCountdown(
+            attempt,
+            () -> {
+                if (!runManager.beginResetting()) {
+                    plugin.getLogger().severe(
+                        "[Instigate Cafe Hardcore] "
+                            + "Unable to transition attempt #"
+                            + attempt
+                            + " from ENDING to RESETTING."
+                    );
+
+                    return;
+                }
+
+                if (
+                    !worldRotationManager
+                        .rotateToStandby()
+                ) {
+                    plugin.getLogger().severe(
+                        "[Instigate Cafe Hardcore] "
+                            + "World rotation failed after attempt #"
+                            + attempt
+                            + "."
+                    );
+                }
+            }
+        );
     }
 
-    private void announceRunEnd(
+    private void suppressVanillaDeath(
+        PlayerDeathEvent event
+    ) {
+        event.deathMessage(
+            null
+        );
+
+        event.getDrops()
+            .clear();
+
+        event.setDroppedExp(
+            0
+        );
+    }
+
+    private void announceAttemptDeath(
         Player player,
-        Component deathMessage,
-        int attemptNumber,
-        PlayerStats playerStats
+        int attempt,
+        int totalDeaths,
+        String deathMessage
     ) {
         Component divider =
             Component.text(
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                NamedTextColor.DARK_RED
+                NamedTextColor.DARK_GRAY
             );
 
-        Component brand =
+        plugin.getServer().broadcast(
+            divider
+        );
+
+        plugin.getServer().broadcast(
             Component.text(
                 "INSTIGATE CAFE HARDCORE",
                 NamedTextColor.GOLD
-            );
+            ).decorate(
+                TextDecoration.BOLD
+            )
+        );
 
-        Component attempt =
+        plugin.getServer().broadcast(
             Component.text(
                 "Attempt #"
-                    + attemptNumber
+                    + attempt
                     + " has ended",
                 NamedTextColor.RED
-            );
+            )
+        );
 
-        Component fallbackDeathMessage =
+        plugin.getServer().broadcast(
+            Component.empty()
+        );
+
+        plugin.getServer().broadcast(
             Component.text(
-                player.getName()
-                    + " died.",
+                deathMessage,
                 NamedTextColor.WHITE
-            );
+            )
+        );
 
-        Component deathCount =
-            Component.text(
-                playerStats.name()
-                    + " now has "
-                    + playerStats.deaths()
-                    + " total "
-                    + (
-                        playerStats.deaths() == 1
-                            ? "death."
-                            : "deaths."
-                    ),
-                NamedTextColor.GRAY
-            );
+        plugin.getServer().broadcast(
+            Component.text()
+                .append(
+                    Component.text(
+                        player.getName(),
+                        NamedTextColor.RED
+                    )
+                )
+                .append(
+                    Component.text(
+                        " now has "
+                            + totalDeaths
+                            + " total death"
+                            + (
+                                totalDeaths == 1
+                                    ? ""
+                                    : "s"
+                            )
+                            + ".",
+                        NamedTextColor.GRAY
+                    )
+                )
+                .build()
+        );
 
-        Component nextAttemptMessage =
+        plugin.getServer().broadcast(
+            Component.empty()
+        );
+
+        plugin.getServer().broadcast(
             Component.text(
                 "Next attempt in "
-                    + countdownManager
-                        .getDurationSeconds()
+                    + countdownManager.getDurationSeconds()
                     + " seconds...",
                 NamedTextColor.GRAY
+            )
+        );
+
+        plugin.getServer().broadcast(
+            divider
+        );
+    }
+
+    /**
+     * Produces a stable display category suitable for statistics.
+     *
+     * When the final damage directly came from an entity, prefer
+     * that entity over the generic Bukkit damage cause.
+     */
+    private String determineDeathCause(
+        Player player
+    ) {
+        EntityDamageEvent damageEvent =
+            player.getLastDamageCause();
+
+        if (damageEvent == null) {
+            return "Unknown";
+        }
+
+        if (
+            damageEvent
+                instanceof EntityDamageByEntityEvent byEntity
+        ) {
+            Entity damager =
+                byEntity.getDamager();
+
+            if (damager instanceof Projectile projectile) {
+                ProjectileSource shooter =
+                    projectile.getShooter();
+
+                if (shooter instanceof Player playerShooter) {
+                    return playerShooter.getName();
+                }
+
+                if (shooter instanceof Entity entityShooter) {
+                    return formatEnumName(
+                        entityShooter
+                            .getType()
+                            .name()
+                    );
+                }
+            }
+
+            if (damager instanceof Player playerDamager) {
+                return playerDamager.getName();
+            }
+
+            return formatEnumName(
+                damager
+                    .getType()
+                    .name()
+            );
+        }
+
+        return formatEnumName(
+            damageEvent
+                .getCause()
+                .name()
+        );
+    }
+
+    private String formatEnumName(
+        String value
+    ) {
+        String[] words =
+            value
+                .toLowerCase(
+                    Locale.ROOT
+                )
+                .split("_");
+
+        StringBuilder result =
+            new StringBuilder();
+
+        for (String word : words) {
+            if (word.isEmpty()) {
+                continue;
+            }
+
+            if (!result.isEmpty()) {
+                result.append(
+                    ' '
+                );
+            }
+
+            result.append(
+                Character.toUpperCase(
+                    word.charAt(0)
+                )
             );
 
-        plugin.getServer().broadcast(
-            Component.empty()
-        );
+            if (word.length() > 1) {
+                result.append(
+                    word.substring(1)
+                );
+            }
+        }
 
-        plugin.getServer().broadcast(
-            divider
-        );
-
-        plugin.getServer().broadcast(
-            brand
-        );
-
-        plugin.getServer().broadcast(
-            attempt
-        );
-
-        plugin.getServer().broadcast(
-            Component.empty()
-        );
-
-        plugin.getServer().broadcast(
-            deathMessage != null
-                ? deathMessage
-                : fallbackDeathMessage
-        );
-
-        plugin.getServer().broadcast(
-            deathCount
-        );
-
-        plugin.getServer().broadcast(
-            Component.empty()
-        );
-
-        plugin.getServer().broadcast(
-            nextAttemptMessage
-        );
-
-        plugin.getServer().broadcast(
-            divider
-        );
-
-        plugin.getServer().broadcast(
-            Component.empty()
-        );
+        return result.isEmpty()
+            ? "Unknown"
+            : result.toString();
     }
 }

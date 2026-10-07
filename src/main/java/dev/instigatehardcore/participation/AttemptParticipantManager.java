@@ -25,7 +25,8 @@ import java.util.regex.Pattern;
 
 public final class AttemptParticipantManager {
 
-    private static final int FORMAT_VERSION = 1;
+    private static final int FORMAT_VERSION =
+        1;
 
     private static final Pattern ATTEMPT_KEY =
         Pattern.compile(
@@ -49,7 +50,9 @@ public final class AttemptParticipantManager {
         Path dataFile
     ) {
         this.dataFile =
-            Objects.requireNonNull(dataFile);
+            Objects.requireNonNull(
+                dataFile
+            );
     }
 
     public synchronized void load()
@@ -111,7 +114,8 @@ public final class AttemptParticipantManager {
         }
 
         /*
-         * Load empty attempt records first.
+         * Load attempt entries first so an attempt with zero
+         * participants is still represented.
          */
         for (
             String key :
@@ -140,7 +144,7 @@ public final class AttemptParticipantManager {
         }
 
         /*
-         * Load participants.
+         * Load each stored participant.
          */
         for (
             String key :
@@ -291,7 +295,9 @@ public final class AttemptParticipantManager {
 
             for (
                 AttemptParticipant participant :
-                getParticipants(attempt)
+                getParticipants(
+                    attempt
+                )
             ) {
                 properties.setProperty(
                     nameKey(
@@ -350,10 +356,10 @@ public final class AttemptParticipantManager {
     }
 
     /**
-     * Makes sure an attempt exists without clearing anything
-     * already recorded for it.
+     * Makes sure an attempt exists without clearing previously
+     * recorded participation.
      *
-     * This is important for normal Paper restarts.
+     * This makes normal Paper restarts safe.
      */
     public synchronized void ensureAttempt(
         int attempt
@@ -383,8 +389,11 @@ public final class AttemptParticipantManager {
     /**
      * Adds a player to an attempt exactly once.
      *
-     * Rejoining updates their latest username but does not
-     * change their original participation timestamp.
+     * Rejoining the same attempt does not create another
+     * participant entry.
+     *
+     * If their username has changed, the newest username is
+     * stored while preserving the original first-join timestamp.
      *
      * @return true when this is the player's first participation
      *         in this attempt
@@ -428,8 +437,8 @@ public final class AttemptParticipantManager {
 
         if (existing != null) {
             /*
-             * Preserve original join time while keeping the
-             * latest username.
+             * Keep the latest username but never change the
+             * original first-participation timestamp.
              */
             if (
                 !existing.name()
@@ -465,6 +474,10 @@ public final class AttemptParticipantManager {
         return true;
     }
 
+    /**
+     * Returns the participants for one attempt in the order they
+     * first entered it.
+     */
     public synchronized List<AttemptParticipant> getParticipants(
         int attempt
     ) {
@@ -515,6 +528,10 @@ public final class AttemptParticipantManager {
         int attempt,
         UUID uuid
     ) {
+        Objects.requireNonNull(
+            uuid
+        );
+
         Map<UUID, AttemptParticipant> participants =
             participantsByAttempt.get(
                 attempt
@@ -524,6 +541,68 @@ public final class AttemptParticipantManager {
             && participants.containsKey(
                 uuid
             );
+    }
+
+    /**
+     * Returns the number of unique attempts in which this player
+     * actually participated.
+     *
+     * This is intentionally NOT based on the global current
+     * attempt number.
+     */
+    public synchronized int getAttemptsPlayed(
+        UUID uuid
+    ) {
+        Objects.requireNonNull(
+            uuid
+        );
+
+        int count =
+            0;
+
+        for (
+            Map<UUID, AttemptParticipant> participants :
+            participantsByAttempt.values()
+        ) {
+            if (
+                participants.containsKey(
+                    uuid
+                )
+            ) {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /**
+     * Returns the exact attempt numbers in which the player
+     * participated.
+     */
+    public synchronized List<Integer> getAttemptsPlayedList(
+        UUID uuid
+    ) {
+        Objects.requireNonNull(
+            uuid
+        );
+
+        return participantsByAttempt
+            .entrySet()
+            .stream()
+            .filter(
+                entry ->
+                    entry
+                        .getValue()
+                        .containsKey(
+                            uuid
+                        )
+            )
+            .map(
+                Map.Entry::getKey
+            )
+            .sorted()
+            .toList();
     }
 
     public Path getDataFile() {

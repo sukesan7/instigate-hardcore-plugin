@@ -5,6 +5,7 @@ import dev.instigatehardcore.participation.AttemptParticipantManager;
 import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
+import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
 import dev.instigatehardcore.world.WorldSetManager;
 
 import org.bukkit.GameMode;
@@ -25,6 +26,7 @@ public final class PlayerJoinListener implements Listener {
 
     private final JavaPlugin plugin;
     private final StatsManager statsManager;
+
     private final HardcoreScoreboardManager scoreboardManager;
 
     private final RunManager runManager;
@@ -32,6 +34,7 @@ public final class PlayerJoinListener implements Listener {
     private final WorldSetManager worldSetManager;
 
     private final AttemptParticipantManager participantManager;
+    private final PlayerTelemetryManager telemetryManager;
 
     public PlayerJoinListener(
         JavaPlugin plugin,
@@ -40,7 +43,8 @@ public final class PlayerJoinListener implements Listener {
         RunManager runManager,
         PlayerResetManager playerResetManager,
         WorldSetManager worldSetManager,
-        AttemptParticipantManager participantManager
+        AttemptParticipantManager participantManager,
+        PlayerTelemetryManager telemetryManager
     ) {
         this.plugin =
             Objects.requireNonNull(plugin);
@@ -71,6 +75,11 @@ public final class PlayerJoinListener implements Listener {
             Objects.requireNonNull(
                 participantManager
             );
+
+        this.telemetryManager =
+            Objects.requireNonNull(
+                telemetryManager
+            );
     }
 
     @EventHandler
@@ -93,9 +102,8 @@ public final class PlayerJoinListener implements Listener {
         }
 
         /*
-         * Give Paper time to finish restoring the player's
-         * saved world/location/gamemode before enforcing
-         * hardcore campaign state.
+         * Wait for Paper to finish restoring the player's saved
+         * location and gamemode before enforcing campaign state.
          */
         plugin.getServer()
             .getScheduler()
@@ -145,8 +153,8 @@ public final class PlayerJoinListener implements Listener {
         }
 
         /*
-         * Anyone joining while the run is ENDING or RESETTING
-         * must stay outside normal gameplay.
+         * Players joining during ENDING or RESETTING must remain
+         * outside active gameplay.
          */
         sendToSafetyLobby(
             player
@@ -162,10 +170,8 @@ public final class PlayerJoinListener implements Listener {
                 .getSpawnLocation();
 
         /*
-         * Player belongs to an old attempt, lobby world,
-         * or some other stale world.
-         *
-         * Give them a clean entry into the current attempt.
+         * The player was restored into the lobby, an old attempt,
+         * or another stale world.
          */
         if (
             !worldSetManager.isActiveWorld(
@@ -180,6 +186,10 @@ public final class PlayerJoinListener implements Listener {
                     );
 
                 recordParticipation(
+                    player
+                );
+
+                beginTelemetrySession(
                     player
                 );
 
@@ -206,10 +216,10 @@ public final class PlayerJoinListener implements Listener {
         }
 
         /*
-         * Returning player is already inside the current attempt.
+         * The player is already inside the current ACTIVE attempt.
          *
-         * Preserve their inventory/location, but ensure Paper has
-         * not restored them in spectator mode after recovery.
+         * Preserve inventory/location while correcting any stale
+         * spectator state left by crash recovery.
          */
         normalizeActivePlayer(
             player
@@ -219,32 +229,19 @@ public final class PlayerJoinListener implements Listener {
             player
         );
 
+        beginTelemetrySession(
+            player
+        );
+
         scheduleActiveStateVerification(
             player
         );
     }
 
-    /**
-     * Records this player as a participant in the current attempt.
-     *
-     * Their UUID is only counted once for that attempt.
-     */
     private void recordParticipation(
         Player player
     ) {
-        if (!player.isOnline()) {
-            return;
-        }
-
-        if (!runManager.isActive()) {
-            return;
-        }
-
-        if (
-            !worldSetManager.isActiveWorld(
-                player.getWorld()
-            )
-        ) {
+        if (!isActiveParticipantLocation(player)) {
             return;
         }
 
@@ -280,22 +277,41 @@ public final class PlayerJoinListener implements Listener {
         }
     }
 
+    /**
+     * Starts actual ACTIVE-attempt playtime accounting.
+     *
+     * PlayerTelemetryManager.beginSession() is idempotent for an
+     * already-running session in the same attempt.
+     */
+    private void beginTelemetrySession(
+        Player player
+    ) {
+        if (!isActiveParticipantLocation(player)) {
+            return;
+        }
+
+        telemetryManager.beginSession(
+            statsManager
+                .getCurrentAttempt(),
+            player.getUniqueId(),
+            player.getName()
+        );
+    }
+
+    private boolean isActiveParticipantLocation(
+        Player player
+    ) {
+        return player.isOnline()
+            && runManager.isActive()
+            && worldSetManager.isActiveWorld(
+                player.getWorld()
+            );
+    }
+
     private void normalizeActivePlayer(
         Player player
     ) {
-        if (!player.isOnline()) {
-            return;
-        }
-
-        if (!runManager.isActive()) {
-            return;
-        }
-
-        if (
-            !worldSetManager.isActiveWorld(
-                player.getWorld()
-            )
-        ) {
+        if (!isActiveParticipantLocation(player)) {
             return;
         }
 
@@ -321,8 +337,8 @@ public final class PlayerJoinListener implements Listener {
     }
 
     /**
-     * Paper may apply additional login state shortly after the
-     * join event, so verify gameplay state again a few ticks later.
+     * Paper can apply additional player state shortly after the
+     * join event. Verify once more after login restoration.
      */
     private void scheduleActiveStateVerification(
         Player player
@@ -332,31 +348,24 @@ public final class PlayerJoinListener implements Listener {
             .runTaskLater(
                 plugin,
                 () -> {
-                    if (!player.isOnline()) {
+                    if (!isActiveParticipantLocation(player)) {
                         return;
                     }
 
-                    if (!runManager.isActive()) {
-                        return;
-                    }
+                    normalizeActivePlayer(
+                        player
+                    );
 
-                    if (
-                        worldSetManager.isActiveWorld(
-                            player.getWorld()
-                        )
-                    ) {
-                        normalizeActivePlayer(
-                            player
-                        );
+                    /*
+                     * Both operations are idempotent.
+                     */
+                    recordParticipation(
+                        player
+                    );
 
-                        /*
-                         * Idempotent. This also helps guarantee
-                         * participation is recorded after recovery.
-                         */
-                        recordParticipation(
-                            player
-                        );
-                    }
+                    beginTelemetrySession(
+                        player
+                    );
                 },
                 JOIN_VERIFICATION_DELAY_TICKS
             );
@@ -365,15 +374,31 @@ public final class PlayerJoinListener implements Listener {
     private void sendToSafetyLobby(
         Player player
     ) {
+        /*
+         * A player being moved out of gameplay should not retain
+         * an ACTIVE telemetry session.
+         */
+        try {
+            telemetryManager.endSession(
+                player.getUniqueId()
+            );
+        } catch (
+            IOException exception
+        ) {
+            plugin.getLogger().severe(
+                "Failed to close telemetry session for "
+                    + player.getName()
+                    + "."
+            );
+
+            exception.printStackTrace();
+        }
+
         playerResetManager
             .prepareForCountdown(
                 player
             );
 
-        /*
-         * prepareForCountdown() may need to respawn a dead player,
-         * so defer the lobby teleport by another tick.
-         */
         plugin.getServer()
             .getScheduler()
             .runTask(

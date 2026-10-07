@@ -5,6 +5,7 @@ import dev.instigatehardcore.participation.AttemptParticipantManager;
 import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
+import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -36,10 +37,8 @@ public final class WorldRotationManager {
     private final WorldCleanupManager worldCleanupManager;
 
     private final AttemptParticipantManager participantManager;
+    private final PlayerTelemetryManager telemetryManager;
 
-    /*
-     * May be null when scoreboard.enabled=false.
-     */
     private final HardcoreScoreboardManager scoreboardManager;
 
     private boolean rotationInProgress;
@@ -52,6 +51,7 @@ public final class WorldRotationManager {
         WorldSetManager worldSetManager,
         WorldCleanupManager worldCleanupManager,
         AttemptParticipantManager participantManager,
+        PlayerTelemetryManager telemetryManager,
         HardcoreScoreboardManager scoreboardManager
     ) {
         this.plugin =
@@ -83,14 +83,18 @@ public final class WorldRotationManager {
                 participantManager
             );
 
+        this.telemetryManager =
+            Objects.requireNonNull(
+                telemetryManager
+            );
+
+        /*
+         * May be null when scoreboard.enabled=false.
+         */
         this.scoreboardManager =
             scoreboardManager;
     }
 
-    /**
-     * Seamlessly promotes the prepared standby attempt and
-     * transfers every connected player into it.
-     */
     public synchronized boolean rotateToStandby() {
         if (rotationInProgress) {
             plugin.getLogger().warning(
@@ -202,26 +206,43 @@ public final class WorldRotationManager {
         );
 
         /*
-         * Persist the world-rotation transaction before touching
-         * players.
+         * Defensive safeguard. DeathListener normally closes these
+         * immediately when ACTIVE -> ENDING occurs.
+         */
+        try {
+            telemetryManager
+                .endAttemptSessions(
+                    oldAttempt
+                );
+        } catch (
+            IOException exception
+        ) {
+            plugin.getLogger().severe(
+                "Failed to finalize telemetry for attempt #"
+                    + oldAttempt
+                    + " before rotation."
+            );
+
+            exception.printStackTrace();
+        }
+
+        /*
+         * Persist ROTATING before moving the first player.
          */
         worldSetManager
             .beginRotation();
 
-        /*
-         * Create an empty persistent participant record for the
-         * new attempt.
-         *
-         * Existing history from previous attempts remains intact.
-         */
         participantManager
             .ensureAttempt(
                 newAttempt
             );
 
         /*
-         * Everyone currently online enters the next attempt and
-         * therefore immediately becomes one of its participants.
+         * Move everyone currently connected into the prepared
+         * standby attempt.
+         *
+         * Participation is persisted immediately. Playtime does
+         * not begin yet because RunManager is still RESETTING.
          */
         for (
             Player player :
@@ -242,17 +263,10 @@ public final class WorldRotationManager {
                 );
         }
 
-        /*
-         * STANDBY -> ACTIVE
-         * ACTIVE  -> RETIRED
-         */
         WorldSet retiredWorldSet =
             worldSetManager
                 .promoteStandby();
 
-        /*
-         * Advance persistent campaign statistics.
-         */
         int advancedAttempt =
             statsManager
                 .advanceAttempt();
@@ -271,12 +285,33 @@ public final class WorldRotationManager {
         }
 
         /*
-         * RESETTING -> ACTIVE and restart the run timer.
+         * RESETTING -> ACTIVE.
          */
         if (!runManager.beginNextRun()) {
             throw new IllegalStateException(
                 "Unable to transition new attempt to ACTIVE."
             );
+        }
+
+        /*
+         * Only now does gameplay time for the new attempt begin.
+         */
+        for (
+            Player player :
+            plugin.getServer()
+                .getOnlinePlayers()
+        ) {
+            if (
+                worldSetManager.isActiveWorld(
+                    player.getWorld()
+                )
+            ) {
+                telemetryManager.beginSession(
+                    newAttempt,
+                    player.getUniqueId(),
+                    player.getName()
+                );
+            }
         }
 
         if (scoreboardManager != null) {
@@ -299,9 +334,6 @@ public final class WorldRotationManager {
                 + " participant(s)."
         );
 
-        /*
-         * Safely remove the old attempt.
-         */
         boolean cleanupScheduled =
             worldCleanupManager
                 .scheduleCleanup(
@@ -315,9 +347,6 @@ public final class WorldRotationManager {
             );
         }
 
-        /*
-         * Prepare the following attempt.
-         */
         scheduleReplacementStandby();
     }
 
@@ -422,9 +451,6 @@ public final class WorldRotationManager {
         }
     }
 
-    /**
-     * Emergency fallback if rotation fails.
-     */
     private void moveEveryoneToSafety() {
         Location lobbySpawn =
             worldSetManager
@@ -442,6 +468,25 @@ public final class WorldRotationManager {
             plugin.getServer()
                 .getOnlinePlayers()
         ) {
+            /*
+             * A failed rotation must not leave playtime running.
+             */
+            try {
+                telemetryManager.endSession(
+                    player.getUniqueId()
+                );
+            } catch (
+                IOException exception
+            ) {
+                plugin.getLogger().severe(
+                    "Unable to close telemetry session for "
+                        + player.getName()
+                        + " during emergency recovery."
+                );
+
+                exception.printStackTrace();
+            }
+
             try {
                 playerResetManager
                     .prepareForCountdown(

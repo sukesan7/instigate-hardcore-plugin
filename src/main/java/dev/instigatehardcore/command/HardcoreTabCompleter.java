@@ -1,5 +1,7 @@
 package dev.instigatehardcore.command;
 
+import dev.instigatehardcore.stats.StatsManager;
+
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
@@ -12,6 +14,17 @@ import java.util.Objects;
 public final class HardcoreTabCompleter
     implements TabCompleter {
 
+    private final StatsManager statsManager;
+
+    public HardcoreTabCompleter(
+        StatsManager statsManager
+    ) {
+        this.statsManager =
+            Objects.requireNonNull(
+                statsManager
+            );
+    }
+
     @Override
     public List<String> onTabComplete(
         CommandSender sender,
@@ -19,14 +32,6 @@ public final class HardcoreTabCompleter
         String alias,
         String[] args
     ) {
-        Objects.requireNonNull(sender);
-        Objects.requireNonNull(command);
-        Objects.requireNonNull(alias);
-        Objects.requireNonNull(args);
-
-        /*
-         * /hc <TAB>
-         */
         if (args.length == 1) {
             List<String> commands =
                 new ArrayList<>();
@@ -77,14 +82,6 @@ public final class HardcoreTabCompleter
             );
         }
 
-        /*
-         * Player completion for:
-         *
-         * /hc stats <player>
-         *
-         * We'll expand this later so offline historical players
-         * can also appear.
-         */
         if (
             args.length == 2
                 && args[0].equalsIgnoreCase(
@@ -92,16 +89,15 @@ public final class HardcoreTabCompleter
                 )
         ) {
             List<String> players =
-                new ArrayList<>();
-
-            sender.getServer()
-                .getOnlinePlayers()
-                .forEach(
-                    player ->
-                        players.add(
-                            player.getName()
-                        )
-                );
+                statsManager
+                    .getPlayersByDeaths()
+                    .stream()
+                    .map(
+                        player ->
+                            player.name()
+                    )
+                    .distinct()
+                    .toList();
 
             return filter(
                 players,
@@ -109,9 +105,6 @@ public final class HardcoreTabCompleter
             );
         }
 
-        /*
-         * Prevent Bukkit from inserting unrelated suggestions.
-         */
         return List.of();
     }
 

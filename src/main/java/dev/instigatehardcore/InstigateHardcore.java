@@ -8,6 +8,7 @@ import dev.instigatehardcore.countdown.CountdownManager;
 
 import dev.instigatehardcore.listener.DeathListener;
 import dev.instigatehardcore.listener.PlayerJoinListener;
+import dev.instigatehardcore.listener.PlayerQuitListener;
 import dev.instigatehardcore.listener.PortalRoutingListener;
 
 import dev.instigatehardcore.participation.AttemptParticipantManager;
@@ -15,6 +16,8 @@ import dev.instigatehardcore.participation.AttemptParticipantManager;
 import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
+
+import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
 
 import dev.instigatehardcore.world.WorldCleanupManager;
 import dev.instigatehardcore.world.WorldRecoveryManager;
@@ -25,6 +28,7 @@ import dev.instigatehardcore.world.WorldStateStore;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -40,12 +44,24 @@ public final class InstigateHardcore extends JavaPlugin {
     private static final int DEFAULT_PRELOAD_RADIUS_CHUNKS =
         1;
 
+    /*
+     * Live player telemetry is checkpointed every minute.
+     *
+     * Normal shutdown commits everything immediately.
+     * A hard process crash should therefore lose at most roughly
+     * one checkpoint interval of playtime.
+     */
+    private static final long TELEMETRY_CHECKPOINT_INTERVAL_TICKS =
+        20L * 60L;
+
     private RunManager runManager;
 
     private StatsManager statsManager;
     private AttemptParticipantManager participantManager;
+    private PlayerTelemetryManager telemetryManager;
 
     private CountdownManager countdownManager;
+
     private HardcoreScoreboardManager scoreboardManager;
     private PlayerResetManager playerResetManager;
 
@@ -56,36 +72,45 @@ public final class InstigateHardcore extends JavaPlugin {
     private WorldCleanupManager worldCleanupManager;
     private WorldRotationManager worldRotationManager;
 
+    private BukkitTask telemetryCheckpointTask;
+
     @Override
     public void onEnable() {
         saveDefaultConfig();
 
         /*
-         * Campaign/player statistics are needed before Phase 6
-         * world recovery.
+         * Persistent campaign statistics must initialize first
+         * because Phase 6 recovery depends on the attempt number.
          */
         if (!initializeStats()) {
             return;
         }
 
         /*
-         * Recover the authoritative campaign attempt and load the
-         * ACTIVE/STANDBY world pipeline.
+         * Recover the authoritative ACTIVE/STANDBY world state.
          */
         if (!initializeWorldSets()) {
             return;
         }
 
         /*
-         * Participant tracking must initialize AFTER world
-         * recovery because recovery may advance the attempt.
+         * Attempt participation is initialized after recovery
+         * because recovery may advance the current attempt.
          */
         if (!initializeParticipants()) {
             return;
         }
 
         /*
-         * Runtime gameplay becomes active only after persistent
+         * Rich player telemetry is independent from critical
+         * StatsManager campaign persistence.
+         */
+        if (!initializeTelemetry()) {
+            return;
+        }
+
+        /*
+         * Runtime state only becomes ACTIVE after all persistent
          * campaign state has initialized successfully.
          */
         runManager =
@@ -96,9 +121,7 @@ public final class InstigateHardcore extends JavaPlugin {
                 "Failed to initialize hardcore run state."
             );
 
-            getServer()
-                .getPluginManager()
-                .disablePlugin(this);
+            disableSelf();
 
             return;
         }
@@ -119,6 +142,8 @@ public final class InstigateHardcore extends JavaPlugin {
             return;
         }
 
+        initializeTelemetryCheckpoint();
+
         if (scoreboardManager != null) {
             scoreboardManager.start();
         }
@@ -130,12 +155,39 @@ public final class InstigateHardcore extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (telemetryCheckpointTask != null) {
+            telemetryCheckpointTask.cancel();
+
+            telemetryCheckpointTask =
+                null;
+        }
+
         if (countdownManager != null) {
             countdownManager.cancel();
         }
 
         if (scoreboardManager != null) {
             scoreboardManager.stop();
+        }
+
+        /*
+         * Commit any currently running playtime sessions before
+         * the server exits.
+         */
+        if (telemetryManager != null) {
+            try {
+                telemetryManager
+                    .closeAllSessions();
+            } catch (
+                IOException exception
+            ) {
+                getLogger().severe(
+                    "Failed to finalize player telemetry "
+                        + "during shutdown."
+                );
+
+                exception.printStackTrace();
+            }
         }
 
         if (statsManager != null) {
@@ -199,16 +251,15 @@ public final class InstigateHardcore extends JavaPlugin {
 
             exception.printStackTrace();
 
-            getServer()
-                .getPluginManager()
-                .disablePlugin(this);
+            disableSelf();
 
             return false;
         }
     }
 
     /**
-     * Runs Phase 6 recovery and loads ACTIVE/STANDBY worlds.
+     * Performs Phase 6 crash/restart recovery and then loads
+     * the authoritative ACTIVE and STANDBY WorldSets.
      */
     private boolean initializeWorldSets() {
         String lobbyWorldName =
@@ -308,9 +359,7 @@ public final class InstigateHardcore extends JavaPlugin {
 
             exception.printStackTrace();
 
-            getServer()
-                .getPluginManager()
-                .disablePlugin(this);
+            disableSelf();
 
             return false;
         }
@@ -339,17 +388,14 @@ public final class InstigateHardcore extends JavaPlugin {
 
             exception.printStackTrace();
 
-            getServer()
-                .getPluginManager()
-                .disablePlugin(this);
+            disableSelf();
 
             return false;
         }
     }
 
     /**
-     * Loads persistent participant history and guarantees the
-     * current recovered attempt has its own participant set.
+     * Loads persistent per-attempt participation history.
      */
     private boolean initializeParticipants() {
         participantManager =
@@ -364,6 +410,13 @@ public final class InstigateHardcore extends JavaPlugin {
         try {
             participantManager.load();
 
+            /*
+             * Important:
+             *
+             * Do not clear the current participant set during a
+             * normal restart. ensureAttempt() only creates it when
+             * it does not already exist.
+             */
             participantManager.ensureAttempt(
                 statsManager
                     .getCurrentAttempt()
@@ -379,9 +432,39 @@ public final class InstigateHardcore extends JavaPlugin {
 
             exception.printStackTrace();
 
-            getServer()
-                .getPluginManager()
-                .disablePlugin(this);
+            disableSelf();
+
+            return false;
+        }
+    }
+
+    /**
+     * Loads persistent playtime and structured death telemetry.
+     */
+    private boolean initializeTelemetry() {
+        telemetryManager =
+            new PlayerTelemetryManager(
+                getDataFolder()
+                    .toPath()
+                    .resolve(
+                        "player-telemetry.yml"
+                    )
+            );
+
+        try {
+            telemetryManager.load();
+
+            return true;
+        } catch (
+            IOException exception
+        ) {
+            getLogger().severe(
+                "Unable to load persistent player telemetry."
+            );
+
+            exception.printStackTrace();
+
+            disableSelf();
 
             return false;
         }
@@ -478,6 +561,7 @@ public final class InstigateHardcore extends JavaPlugin {
                 worldSetManager,
                 worldCleanupManager,
                 participantManager,
+                telemetryManager,
                 scoreboardManager
             );
     }
@@ -490,6 +574,7 @@ public final class InstigateHardcore extends JavaPlugin {
                     this,
                     runManager,
                     statsManager,
+                    telemetryManager,
                     countdownManager,
                     playerResetManager,
                     worldSetManager,
@@ -519,7 +604,18 @@ public final class InstigateHardcore extends JavaPlugin {
                     runManager,
                     playerResetManager,
                     worldSetManager,
-                    participantManager
+                    participantManager,
+                    telemetryManager
+                ),
+                this
+            );
+
+        getServer()
+            .getPluginManager()
+            .registerEvents(
+                new PlayerQuitListener(
+                    this,
+                    telemetryManager
                 ),
                 this
             );
@@ -542,27 +638,42 @@ public final class InstigateHardcore extends JavaPlugin {
                 "The \"hardcore\" command is missing from plugin.yml."
             );
 
-            getServer()
-                .getPluginManager()
-                .disablePlugin(
-                    this
-                );
+            disableSelf();
 
             return false;
         }
 
+        /*
+         * Phase 7B command implementation.
+         *
+         * HardcoreCommand now has access to telemetry so it can
+         * provide:
+         *
+         * /hc status
+         * /hc stats
+         * /hc stats <player>
+         * /hc deaths
+         */
         HardcoreCommand executor =
             new HardcoreCommand(
                 runManager,
                 statsManager,
                 participantManager,
+                telemetryManager,
                 worldSetManager,
                 worldRotationManager,
                 worldCleanupManager
             );
 
+        /*
+         * Historical StatsManager players are used for
+         * /hc stats <TAB>, allowing offline participants to appear
+         * in completion suggestions.
+         */
         HardcoreTabCompleter tabCompleter =
-            new HardcoreTabCompleter();
+            new HardcoreTabCompleter(
+                statsManager
+            );
 
         hardcoreCommand.setExecutor(
             executor
@@ -580,8 +691,39 @@ public final class InstigateHardcore extends JavaPlugin {
     }
 
     /**
-     * Supports development reloads or other scenarios where
-     * players are already online during plugin initialization.
+     * Periodically commits active playtime without ending the
+     * sessions.
+     */
+    private void initializeTelemetryCheckpoint() {
+        telemetryCheckpointTask =
+            getServer()
+                .getScheduler()
+                .runTaskTimer(
+                    this,
+                    () -> {
+                        try {
+                            telemetryManager
+                                .checkpointActiveSessions();
+                        } catch (
+                            IOException exception
+                        ) {
+                            getLogger().severe(
+                                "Failed to checkpoint player telemetry."
+                            );
+
+                            exception.printStackTrace();
+                        }
+                    },
+                    TELEMETRY_CHECKPOINT_INTERVAL_TICKS,
+                    TELEMETRY_CHECKPOINT_INTERVAL_TICKS
+                );
+    }
+
+    /**
+     * Primarily protects development/plugin-reload scenarios.
+     *
+     * Under a normal server startup players usually join after
+     * onEnable() and PlayerJoinListener handles this instead.
      */
     private void registerExistingPlayers() {
         for (
@@ -606,11 +748,6 @@ public final class InstigateHardcore extends JavaPlugin {
                 exception.printStackTrace();
             }
 
-            /*
-             * If an already-online player is currently inside the
-             * recovered ACTIVE attempt, make sure they count as a
-             * participant as well.
-             */
             if (
                 runManager.isActive()
                     && worldSetManager.isActiveWorld(
@@ -636,6 +773,13 @@ public final class InstigateHardcore extends JavaPlugin {
 
                     exception.printStackTrace();
                 }
+
+                telemetryManager.beginSession(
+                    statsManager
+                        .getCurrentAttempt(),
+                    player.getUniqueId(),
+                    player.getName()
+                );
             }
 
             if (scoreboardManager != null) {
@@ -728,8 +872,20 @@ public final class InstigateHardcore extends JavaPlugin {
         );
 
         getLogger().info(
+            "Player telemetry tracking enabled."
+        );
+
+        getLogger().info(
             "Hardcore command framework enabled."
         );
+    }
+
+    private void disableSelf() {
+        getServer()
+            .getPluginManager()
+            .disablePlugin(
+                this
+            );
     }
 
     public RunManager getRunManager() {
@@ -742,6 +898,10 @@ public final class InstigateHardcore extends JavaPlugin {
 
     public AttemptParticipantManager getParticipantManager() {
         return participantManager;
+    }
+
+    public PlayerTelemetryManager getTelemetryManager() {
+        return telemetryManager;
     }
 
     public CountdownManager getCountdownManager() {
