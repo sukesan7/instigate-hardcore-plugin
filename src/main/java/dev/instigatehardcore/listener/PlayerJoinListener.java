@@ -450,10 +450,18 @@ public final class PlayerJoinListener implements Listener {
                  * Existing participant or corrective retry:
                  *
                  * preserve inventory and gameplay state.
+                 *
+                 * Paper only permits setSpectatorTarget() while
+                 * the player is actually in spectator mode.
                  */
-                player.setSpectatorTarget(
-                    null
-                );
+                if (
+                    player.getGameMode()
+                        == GameMode.SPECTATOR
+                ) {
+                    player.setSpectatorTarget(
+                        null
+                    );
+                }
 
                 boolean teleported =
                     player.teleport(
@@ -859,9 +867,18 @@ public final class PlayerJoinListener implements Listener {
     private void normalizeActivePlayer(
         Player player
     ) {
-        player.setSpectatorTarget(
-            null
-        );
+        /*
+         * Paper only permits spectator-target modification while
+         * the player is actually in SPECTATOR mode.
+         */
+        if (
+            player.getGameMode()
+                == GameMode.SPECTATOR
+        ) {
+            player.setSpectatorTarget(
+                null
+            );
+        }
 
         if (
             player.getGameMode()
@@ -953,12 +970,21 @@ public final class PlayerJoinListener implements Listener {
                         return;
                     }
 
+                    /*
+                     * Gamemode must be established before touching
+                     * the spectator target.
+                     */
+                    if (
+                        player.getGameMode()
+                            != GameMode.SPECTATOR
+                    ) {
+                        player.setGameMode(
+                            GameMode.SPECTATOR
+                        );
+                    }
+
                     player.setSpectatorTarget(
                         null
-                    );
-
-                    player.setGameMode(
-                        GameMode.SPECTATOR
                     );
                 }
             );

@@ -63,11 +63,7 @@ public final class PlayerResetManager {
      * spectate the exact place where the attempt ended.
      *
      * The Location retains its World reference, so this naturally
-     * supports deaths in:
-     *
-     * - Overworld
-     * - Nether
-     * - End
+     * supports Overworld, Nether and End deaths.
      */
     public void beginCountdownPhase(
         Location focusLocation
@@ -83,9 +79,7 @@ public final class PlayerResetManager {
         }
 
         /*
-         * Work from our own immutable snapshot of the location.
-         *
-         * Bukkit Location itself is mutable.
+         * Bukkit Location is mutable, so retain our own snapshot.
          */
         Location target =
             focusLocation.clone();
@@ -126,10 +120,8 @@ public final class PlayerResetManager {
         );
 
         /*
-         * A player inside PlayerDeathEvent is still considered
-         * dead.
-         *
-         * Respawn them first, then establish spectator state.
+         * During PlayerDeathEvent the player is still considered
+         * dead. Respawn first, then establish spectator state.
          */
         if (player.isDead()) {
             plugin.getServer()
@@ -191,10 +183,10 @@ public final class PlayerResetManager {
          *
          * 1. respawn;
          * 2. become spectator;
-         * 3. teleport BACK to their saved death location.
+         * 3. teleport back to the saved death location.
          *
-         * This is especially important for Nether and End deaths,
-         * because normal respawn may temporarily place them in
+         * This matters especially for Nether and End deaths,
+         * because normal respawn may temporarily put them into
          * another dimension.
          */
         if (player.isDead()) {
@@ -282,12 +274,21 @@ public final class PlayerResetManager {
     ) {
         player.closeInventory();
 
+        /*
+         * Paper requires the player to already be in SPECTATOR
+         * before setSpectatorTarget() may be called.
+         */
+        if (
+            player.getGameMode()
+                != GameMode.SPECTATOR
+        ) {
+            player.setGameMode(
+                GameMode.SPECTATOR
+            );
+        }
+
         player.setSpectatorTarget(
             null
-        );
-
-        player.setGameMode(
-            GameMode.SPECTATOR
         );
 
         player.setFireTicks(
@@ -318,6 +319,23 @@ public final class PlayerResetManager {
         Location destination =
             target.clone();
 
+        /*
+         * Defensively guarantee spectator state before both the
+         * cross-world teleport and spectator-target operation.
+         */
+        if (
+            player.getGameMode()
+                != GameMode.SPECTATOR
+        ) {
+            player.setGameMode(
+                GameMode.SPECTATOR
+            );
+        }
+
+        player.setSpectatorTarget(
+            null
+        );
+
         boolean teleported =
             player.teleport(
                 destination
@@ -339,15 +357,19 @@ public final class PlayerResetManager {
         }
 
         /*
-         * Teleports can affect velocity/fall state. Reassert the
-         * spectator state after arrival.
+         * Reassert spectator state after cross-world teleport.
          */
+        if (
+            player.getGameMode()
+                != GameMode.SPECTATOR
+        ) {
+            player.setGameMode(
+                GameMode.SPECTATOR
+            );
+        }
+
         player.setSpectatorTarget(
             null
-        );
-
-        player.setGameMode(
-            GameMode.SPECTATOR
         );
 
         player.setFireTicks(
@@ -409,9 +431,17 @@ public final class PlayerResetManager {
             player
         );
 
-        player.setSpectatorTarget(
-            null
-        );
+        /*
+         * Only spectator players may have a spectator target.
+         */
+        if (
+            player.getGameMode()
+                == GameMode.SPECTATOR
+        ) {
+            player.setSpectatorTarget(
+                null
+            );
+        }
 
         boolean teleported =
             player.teleport(
