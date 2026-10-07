@@ -21,13 +21,21 @@ import java.util.Objects;
 
 public final class WorldRotationManager {
 
-    private static final long STANDBY_GENERATION_DELAY_TICKS = 40L;
+    private static final long STANDBY_GENERATION_DELAY_TICKS =
+        40L;
 
     private final JavaPlugin plugin;
     private final RunManager runManager;
     private final StatsManager statsManager;
+
     private final PlayerResetManager playerResetManager;
+
     private final WorldSetManager worldSetManager;
+    private final WorldCleanupManager worldCleanupManager;
+
+    /*
+     * May be null when the sidebar is disabled.
+     */
     private final HardcoreScoreboardManager scoreboardManager;
 
     private boolean rotationInProgress;
@@ -38,6 +46,7 @@ public final class WorldRotationManager {
         StatsManager statsManager,
         PlayerResetManager playerResetManager,
         WorldSetManager worldSetManager,
+        WorldCleanupManager worldCleanupManager,
         HardcoreScoreboardManager scoreboardManager
     ) {
         this.plugin =
@@ -59,22 +68,24 @@ public final class WorldRotationManager {
                 worldSetManager
             );
 
-        /*
-         * Scoreboard may legitimately be disabled in config.yml.
-         */
+        this.worldCleanupManager =
+            Objects.requireNonNull(
+                worldCleanupManager
+            );
+
         this.scoreboardManager =
             scoreboardManager;
     }
 
     /**
-     * Seamlessly moves all players from the failed attempt
-     * into the pre-generated standby attempt.
+     * Seamlessly promotes the prepared standby attempt and
+     * transfers every connected player into it.
      */
     public synchronized boolean rotateToStandby() {
         if (rotationInProgress) {
             plugin.getLogger().warning(
                 "[Instigate Cafe Hardcore] "
-                    + "World rotation already in progress."
+                    + "World rotation is already in progress."
             );
 
             return false;
@@ -102,11 +113,13 @@ public final class WorldRotationManager {
             );
 
             moveEveryoneToSafety();
+
             return false;
         }
 
         int expectedAttempt =
-            statsManager.getCurrentAttempt()
+            statsManager
+                .getCurrentAttempt()
                 + 1;
 
         if (
@@ -123,10 +136,12 @@ public final class WorldRotationManager {
             );
 
             moveEveryoneToSafety();
+
             return false;
         }
 
-        rotationInProgress = true;
+        rotationInProgress =
+            true;
 
         try {
             performRotation(
@@ -134,7 +149,9 @@ public final class WorldRotationManager {
             );
 
             return true;
-        } catch (Exception exception) {
+        } catch (
+            Exception exception
+        ) {
             plugin.getLogger().severe(
                 "[Instigate Cafe Hardcore] "
                     + "Seamless world rotation failed."
@@ -146,7 +163,8 @@ public final class WorldRotationManager {
 
             return false;
         } finally {
-            rotationInProgress = false;
+            rotationInProgress =
+                false;
         }
     }
 
@@ -155,7 +173,8 @@ public final class WorldRotationManager {
     ) throws IOException {
 
         int oldAttempt =
-            statsManager.getCurrentAttempt();
+            statsManager
+                .getCurrentAttempt();
 
         int newAttempt =
             standby.attemptNumber();
@@ -173,11 +192,11 @@ public final class WorldRotationManager {
         );
 
         /*
-         * First move every connected player into the already-created
-         * standby world.
+         * Everyone is already in spectator mode from the
+         * countdown phase.
          *
-         * Their inventory, Ender Chest, XP, potion effects, health,
-         * hunger and other per-attempt state are reset here.
+         * Perform one final state wipe and teleport them into
+         * the prepared standby world.
          */
         for (
             Player player :
@@ -192,18 +211,20 @@ public final class WorldRotationManager {
         }
 
         /*
-         * Players are now safely inside the new world.
+         * Nobody should remain inside the old attempt now.
          *
-         * Promote it to ACTIVE in the world pipeline.
+         * Promote STANDBY -> ACTIVE and ACTIVE -> RETIRED.
          */
-        worldSetManager
-            .promoteStandby();
+        WorldSet retiredWorldSet =
+            worldSetManager
+                .promoteStandby();
 
         /*
-         * Advance persistent campaign statistics.
+         * Advance the persistent campaign attempt number.
          */
         int advancedAttempt =
-            statsManager.advanceAttempt();
+            statsManager
+                .advanceAttempt();
 
         if (
             advancedAttempt
@@ -219,9 +240,10 @@ public final class WorldRotationManager {
         }
 
         /*
-         * RESETTING -> ACTIVE
+         * RESETTING -> ACTIVE.
          *
-         * This also starts a fresh run timer.
+         * RunManager resets startedAt here, which restarts the
+         * scoreboard's elapsed timer from zero.
          */
         if (!runManager.beginNextRun()) {
             throw new IllegalStateException(
@@ -245,10 +267,31 @@ public final class WorldRotationManager {
         );
 
         /*
-         * Generate the next standby shortly after players arrive.
+         * The previous attempt is now completely disposable.
          *
-         * This keeps the critical transition itself as short as
-         * possible.
+         * WorldCleanupManager handles:
+         *
+         * - waiting for a safe unload point
+         * - verifying there are no players inside
+         * - unloading End / Nether / Overworld
+         * - deleting the world folders asynchronously
+         */
+        boolean cleanupScheduled =
+            worldCleanupManager
+                .scheduleCleanup(
+                    retiredWorldSet
+                );
+
+        if (!cleanupScheduled) {
+            plugin.getLogger().severe(
+                "[Instigate Cafe Hardcore] "
+                    + "Retired world cleanup could not be scheduled."
+            );
+        }
+
+        /*
+         * Shortly afterward, create the standby world for the
+         * following attempt.
          */
         scheduleReplacementStandby();
     }
@@ -281,8 +324,8 @@ public final class WorldRotationManager {
                         plugin.getServer().broadcast(
                             Component.text(
                                 "[Instigate Cafe Hardcore] "
-                                    + "Warning: the next standby world "
-                                    + "could not be prepared.",
+                                    + "Warning: the next standby "
+                                    + "world could not be prepared.",
                                 NamedTextColor.RED
                             )
                         );
@@ -355,10 +398,9 @@ public final class WorldRotationManager {
     }
 
     /**
-     * Emergency fallback.
+     * Emergency fallback if world rotation cannot be completed.
      *
-     * Players remain connected but are removed from gameplay if a
-     * world rotation cannot be completed safely.
+     * Players stay connected but are removed from gameplay.
      */
     private void moveEveryoneToSafety() {
         Location lobbySpawn =
@@ -383,20 +425,42 @@ public final class WorldRotationManager {
                         player
                     );
 
-                player.teleport(
-                    lobbySpawn
-                );
+                plugin.getServer()
+                    .getScheduler()
+                    .runTask(
+                        plugin,
+                        () -> {
+                            if (!player.isOnline()) {
+                                return;
+                            }
 
-                player.setGameMode(
-                    GameMode.SPECTATOR
-                );
+                            boolean teleported =
+                                player.teleport(
+                                    lobbySpawn
+                                );
+
+                            if (!teleported) {
+                                plugin.getLogger().severe(
+                                    "Unable to teleport "
+                                        + player.getName()
+                                        + " to the safety lobby."
+                                );
+
+                                return;
+                            }
+
+                            player.setGameMode(
+                                GameMode.SPECTATOR
+                            );
+                        }
+                    );
             } catch (
                 Exception exception
             ) {
                 plugin.getLogger().severe(
                     "Unable to move "
                         + player.getName()
-                        + " to the safety world."
+                        + " to the safety lobby."
                 );
 
                 exception.printStackTrace();

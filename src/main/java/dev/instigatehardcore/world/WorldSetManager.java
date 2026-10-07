@@ -106,7 +106,8 @@ public final class WorldSetManager {
                 state.standbySeed()
             );
 
-        retiredWorldSet = null;
+        retiredWorldSet =
+            null;
 
         logWorldState();
     }
@@ -145,19 +146,28 @@ public final class WorldSetManager {
     }
 
     /**
-     * Promotes the currently prepared STANDBY WorldSet
-     * to ACTIVE.
+     * Promotes the current STANDBY WorldSet to ACTIVE.
      *
-     * The old active WorldSet becomes RETIRED.
-     *
-     * The identity and seed of the next standby attempt are
-     * persisted immediately, although its actual worlds are
-     * generated afterward.
+     * The previous ACTIVE WorldSet becomes RETIRED.
      *
      * @return the previously active WorldSet
      */
     public synchronized WorldSet promoteStandby()
         throws IOException {
+
+        /*
+         * We only support one retired attempt at a time.
+         *
+         * If cleanup has not completed yet, another rotation
+         * must not overwrite the retired reference.
+         */
+        if (retiredWorldSet != null) {
+            throw new IOException(
+                "Cannot rotate while retired attempt #"
+                    + retiredWorldSet.attemptNumber()
+                    + " is still awaiting cleanup."
+            );
+        }
 
         if (standbyWorldSet == null) {
             throw new IOException(
@@ -172,7 +182,8 @@ public final class WorldSetManager {
             standbyWorldSet;
 
         int nextStandbyAttempt =
-            promoted.attemptNumber() + 1;
+            promoted.attemptNumber()
+                + 1;
 
         long nextStandbySeed =
             generateSeedDifferentFrom(
@@ -188,8 +199,8 @@ public final class WorldSetManager {
             );
 
         /*
-         * Persist the pipeline before changing our
-         * in-memory references.
+         * Persist the new pipeline before changing
+         * the in-memory references.
          */
         stateStore.save(
             nextState
@@ -211,12 +222,19 @@ public final class WorldSetManager {
                 + " promoted to ACTIVE."
         );
 
+        plugin.getLogger().info(
+            "[Instigate Cafe Hardcore] "
+                + "Attempt #"
+                + retiredWorldSet.attemptNumber()
+                + " marked as RETIRED."
+        );
+
         return previousActive;
     }
 
     /**
-     * Generates the next standby WorldSet using the identity
-     * already persisted in world-state.properties.
+     * Creates the replacement standby WorldSet described by
+     * world-state.properties.
      */
     public synchronized WorldSet createReplacementStandby()
         throws IOException {
@@ -275,6 +293,44 @@ public final class WorldSetManager {
         );
 
         return standbyWorldSet;
+    }
+
+    /**
+     * Clears the RETIRED reference only after all three worlds
+     * belonging to it have successfully unloaded.
+     */
+    public synchronized void clearRetiredWorldSet(
+        WorldSet expected
+    ) throws IOException {
+
+        Objects.requireNonNull(
+            expected
+        );
+
+        if (retiredWorldSet == null) {
+            return;
+        }
+
+        if (retiredWorldSet != expected) {
+            throw new IOException(
+                "Attempted to clear an unexpected retired WorldSet. "
+                    + "Expected attempt #"
+                    + retiredWorldSet.attemptNumber()
+                    + " but received #"
+                    + expected.attemptNumber()
+                    + "."
+            );
+        }
+
+        plugin.getLogger().info(
+            "[Instigate Cafe Hardcore] "
+                + "Retired reference cleared for attempt #"
+                + retiredWorldSet.attemptNumber()
+                + "."
+        );
+
+        retiredWorldSet =
+            null;
     }
 
     private WorldSet createOrLoadWorldSet(
@@ -360,7 +416,9 @@ public final class WorldSetManager {
         }
 
         WorldCreator creator =
-            WorldCreator.ofKey(key)
+            WorldCreator.ofKey(
+                key
+            )
                 .seed(seed)
                 .environment(environment)
                 .generateStructures(true)
@@ -460,9 +518,6 @@ public final class WorldSetManager {
         );
     }
 
-    /**
-     * Generates a small area surrounding Overworld spawn.
-     */
     private void prepareSpawnArea(
         World world
     ) {
@@ -610,6 +665,10 @@ public final class WorldSetManager {
 
     public synchronized boolean hasStandbyWorldSet() {
         return standbyWorldSet != null;
+    }
+
+    public synchronized boolean hasRetiredWorldSet() {
+        return retiredWorldSet != null;
     }
 
     public synchronized boolean isActiveWorld(

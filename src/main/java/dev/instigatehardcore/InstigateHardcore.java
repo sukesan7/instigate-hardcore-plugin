@@ -7,6 +7,7 @@ import dev.instigatehardcore.listener.PlayerJoinListener;
 import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
+import dev.instigatehardcore.world.WorldCleanupManager;
 import dev.instigatehardcore.world.WorldRotationManager;
 import dev.instigatehardcore.world.WorldSetManager;
 import dev.instigatehardcore.world.WorldStateStore;
@@ -30,10 +31,15 @@ public final class InstigateHardcore extends JavaPlugin {
 
     private RunManager runManager;
     private StatsManager statsManager;
+
     private CountdownManager countdownManager;
+
     private HardcoreScoreboardManager scoreboardManager;
+
     private PlayerResetManager playerResetManager;
+
     private WorldSetManager worldSetManager;
+    private WorldCleanupManager worldCleanupManager;
     private WorldRotationManager worldRotationManager;
 
     @Override
@@ -41,21 +47,28 @@ public final class InstigateHardcore extends JavaPlugin {
         saveDefaultConfig();
 
         /*
-         * Campaign statistics establish which attempt number
-         * should currently be active.
+         * Stats establish which campaign attempt should currently
+         * exist.
          */
         if (!initializeStats()) {
             return;
         }
 
         /*
-         * Create/load the ACTIVE and STANDBY WorldSets before
-         * declaring gameplay active.
+         * Load/create:
+         *
+         * - permanent lobby
+         * - ACTIVE attempt
+         * - STANDBY attempt
          */
         if (!initializeWorldSets()) {
             return;
         }
 
+        /*
+         * Gameplay only becomes ACTIVE after the world pipeline
+         * exists successfully.
+         */
         runManager =
             new RunManager();
 
@@ -78,22 +91,21 @@ public final class InstigateHardcore extends JavaPlugin {
 
         initializeCountdown();
         initializeScoreboard();
+
+        /*
+         * Cleanup must exist before WorldRotationManager because
+         * successful rotations immediately schedule retired-world
+         * cleanup.
+         */
+        initializeWorldCleanup();
         initializeWorldRotation();
 
         registerListeners();
 
-        /*
-         * Start the periodic scoreboard after all systems have
-         * been constructed.
-         */
         if (scoreboardManager != null) {
             scoreboardManager.start();
         }
 
-        /*
-         * Supports development reloads or other cases where
-         * players happen to already be online.
-         */
         registerExistingPlayers();
 
         logStartupState();
@@ -316,6 +328,14 @@ public final class InstigateHardcore extends JavaPlugin {
             );
     }
 
+    private void initializeWorldCleanup() {
+        worldCleanupManager =
+            new WorldCleanupManager(
+                this,
+                worldSetManager
+            );
+    }
+
     private void initializeWorldRotation() {
         worldRotationManager =
             new WorldRotationManager(
@@ -324,6 +344,7 @@ public final class InstigateHardcore extends JavaPlugin {
                 statsManager,
                 playerResetManager,
                 worldSetManager,
+                worldCleanupManager,
                 scoreboardManager
             );
     }
@@ -345,9 +366,10 @@ public final class InstigateHardcore extends JavaPlugin {
             );
 
         /*
-         * PlayerJoinListener must always be registered because it
-         * is also responsible for placing players into the ACTIVE
-         * attempt. It is not merely a scoreboard listener.
+         * Always register this listener.
+         *
+         * Besides scoreboard assignment, it is responsible for
+         * putting players into the current ACTIVE attempt.
          */
         getServer()
             .getPluginManager()
@@ -365,7 +387,8 @@ public final class InstigateHardcore extends JavaPlugin {
     }
 
     /**
-     * Handles already-online players during development reloads.
+     * Supports development reloads and other situations where
+     * players are already online when the plugin initializes.
      */
     private void registerExistingPlayers() {
         for (
@@ -453,6 +476,10 @@ public final class InstigateHardcore extends JavaPlugin {
                 "Hardcore scoreboard enabled."
             );
         }
+
+        getLogger().info(
+            "Seamless world cleanup enabled."
+        );
     }
 
     public RunManager getRunManager() {
@@ -477,6 +504,10 @@ public final class InstigateHardcore extends JavaPlugin {
 
     public WorldSetManager getWorldSetManager() {
         return worldSetManager;
+    }
+
+    public WorldCleanupManager getWorldCleanupManager() {
+        return worldCleanupManager;
     }
 
     public WorldRotationManager getWorldRotationManager() {
