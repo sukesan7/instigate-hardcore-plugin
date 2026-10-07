@@ -69,4 +69,21 @@ class RunManagerTest {
         assertEquals(RunState.RESETTING, manager.getState());
         assertTrue(manager.isResetting());
     }
+
+    @Test
+    void endedRunReportsAsEnded() {
+        RunManager manager = new RunManager();
+
+        manager.startRun();
+
+        assertFalse(manager.hasEnded());
+
+        manager.beginEnding();
+
+        assertTrue(manager.hasEnded());
+
+        manager.beginResetting();
+
+        assertTrue(manager.hasEnded());
+    }
 }

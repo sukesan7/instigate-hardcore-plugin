@@ -1,5 +1,6 @@
 plugins {
     java
+    id("xyz.jpenilla.run-paper") version "3.1.0"
 }
 
 group = "dev.instigatehardcore"
@@ -43,5 +44,16 @@ tasks {
 
     jar {
         archiveBaseName.set("InstigateHardcore")
+    }
+
+    runServer {
+        minecraftVersion("26.3")
+        runDirectory = rootDir.resolve("server")
+
+        javaLauncher = project.javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(25))
+        }
+
+        jvmArgs("-Dcom.mojang.eula.agree=true")
     }
 }

@@ -78,6 +78,10 @@ public final class RunManager {
         return startedAt;
     }
 
+    public synchronized boolean hasEnded() {
+        return state == RunState.ENDING || state == RunState.RESETTING;
+    }
+
     public synchronized Duration getElapsedTime() {
         if (startedAt == null) {
             return Duration.ZERO;

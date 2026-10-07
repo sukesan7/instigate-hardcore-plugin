@@ -1,6 +1,7 @@
 package dev.instigatehardcore;
 
 import dev.instigatehardcore.core.RunManager;
+import dev.instigatehardcore.listener.DeathListener;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class InstigateHardcore extends JavaPlugin {
@@ -19,6 +20,8 @@ public final class InstigateHardcore extends JavaPlugin {
             return;
         }
 
+        registerListeners();
+
         getLogger().info("InstigateHardcore enabled.");
         getLogger().info("Run state: " + runManager.getState());
     }
@@ -26,6 +29,13 @@ public final class InstigateHardcore extends JavaPlugin {
     @Override
     public void onDisable() {
         getLogger().info("InstigateHardcore disabled.");
+    }
+
+    private void registerListeners() {
+        getServer().getPluginManager().registerEvents(
+            new DeathListener(this, runManager),
+            this
+        );
     }
 
     public RunManager getRunManager() {
