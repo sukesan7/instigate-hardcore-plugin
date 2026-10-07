@@ -119,6 +119,42 @@ class StatsManagerTest {
         );
     }
 
+    @Test
+    void newPlayerIsRegisteredWithZeroDeaths() throws IOException {
+        StatsManager manager = createManager();
+
+        UUID playerId = UUID.randomUUID();
+
+        PlayerStats player = manager.ensurePlayer(
+            playerId,
+            "Sukesan"
+        );
+
+        assertEquals("Sukesan", player.name());
+        assertEquals(0, player.deaths());
+        assertEquals(0, manager.getDeaths(playerId));
+    }
+
+    @Test
+    void playerNameCanChangeWithoutResettingDeaths() throws IOException {
+        StatsManager manager = createManager();
+
+        UUID playerId = UUID.randomUUID();
+
+        manager.recordDeath(
+            playerId,
+            "OldName"
+        );
+
+        PlayerStats updated = manager.ensurePlayer(
+            playerId,
+            "NewName"
+        );
+
+        assertEquals("NewName", updated.name());
+        assertEquals(1, updated.deaths());
+    }
+
     private StatsManager createManager() throws IOException {
         Path file = temporaryDirectory.resolve("stats.properties");
 

@@ -214,6 +214,48 @@ public final class StatsManager {
         return List.copyOf(result);
     }
 
+    public synchronized PlayerStats ensurePlayer(
+        UUID uuid,
+        String name
+    ) throws IOException {
+        Objects.requireNonNull(uuid);
+        Objects.requireNonNull(name);
+
+        PlayerStats existing = players.get(uuid);
+
+        if (existing == null) {
+            PlayerStats created = new PlayerStats(
+                uuid,
+                name,
+                0
+            );
+
+            players.put(uuid, created);
+            save();
+
+            return created;
+        }
+
+        /*
+        * Keep the latest Minecraft username while preserving
+        * the player's persistent death count.
+        */
+        if (!existing.name().equals(name)) {
+            PlayerStats updated = new PlayerStats(
+                uuid,
+                name,
+                existing.deaths()
+            );
+
+            players.put(uuid, updated);
+            save();
+
+            return updated;
+        }
+
+        return existing;
+    }
+
     private int parsePositiveInt(
         String value,
         int fallback

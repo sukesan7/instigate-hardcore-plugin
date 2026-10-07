@@ -5,6 +5,7 @@ reset:
 
 scoreboard:
   enabled: true
-
+  update-interval-ticks: 20
+  
 debug:
   enabled: false
