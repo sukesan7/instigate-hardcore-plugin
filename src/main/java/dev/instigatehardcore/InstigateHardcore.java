@@ -4,6 +4,7 @@ import dev.instigatehardcore.core.RunManager;
 import dev.instigatehardcore.countdown.CountdownManager;
 import dev.instigatehardcore.listener.DeathListener;
 import dev.instigatehardcore.listener.PlayerJoinListener;
+import dev.instigatehardcore.listener.PortalRoutingListener;
 import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
@@ -366,10 +367,25 @@ public final class InstigateHardcore extends JavaPlugin {
             );
 
         /*
+         * Keep all portal travel inside the currently ACTIVE
+         * hardcore attempt.
+         */
+        getServer()
+            .getPluginManager()
+            .registerEvents(
+                new PortalRoutingListener(
+                    this,
+                    runManager,
+                    worldSetManager
+                ),
+                this
+            );
+
+        /*
          * Always register this listener.
          *
          * Besides scoreboard assignment, it is responsible for
-         * putting players into the current ACTIVE attempt.
+         * placing players into the current ACTIVE attempt.
          */
         getServer()
             .getPluginManager()
@@ -479,6 +495,10 @@ public final class InstigateHardcore extends JavaPlugin {
 
         getLogger().info(
             "Seamless world cleanup enabled."
+        );
+
+        getLogger().info(
+            "Active-attempt portal routing enabled."
         );
     }
 
