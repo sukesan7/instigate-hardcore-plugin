@@ -14,6 +14,8 @@ import dev.instigatehardcore.stats.StatsManager;
 import dev.instigatehardcore.telemetry.PlayerDeathRecord;
 import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
 
+import dev.instigatehardcore.ui.InstigateTheme;
+
 import dev.instigatehardcore.world.WorldCleanupManager;
 import dev.instigatehardcore.world.WorldRotationManager;
 import dev.instigatehardcore.world.WorldRotationPhase;
@@ -27,7 +29,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
 
-import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 
 import org.bukkit.Bukkit;
@@ -297,9 +299,10 @@ public final class HardcoreCommand
         }
 
         sender.sendMessage(
-            Component.text(
-                "Usage: /hc reset [confirm]",
-                NamedTextColor.RED
+            InstigateTheme.chat(
+                InstigateTheme.error(
+                    "Usage: /hc reset [confirm]"
+                )
             )
         );
     }
@@ -309,28 +312,30 @@ public final class HardcoreCommand
     ) {
         if (!runManager.isActive()) {
             sender.sendMessage(
-                Component.text()
-                    .append(
-                        Component.text(
-                            "The current attempt cannot be reset while state is ",
-                            NamedTextColor.RED
+                InstigateTheme.chat(
+                    Component.text()
+                        .append(
+                            InstigateTheme.error(
+                                "The current attempt cannot be reset while state is "
+                            )
                         )
-                    )
-                    .append(
-                        Component.text(
-                            runManager
-                                .getState()
-                                .name(),
-                            NamedTextColor.WHITE
+                        .append(
+                            Component.text(
+                                formatEnumLabel(
+                                    runManager
+                                        .getState()
+                                        .name()
+                                ),
+                                InstigateTheme.TEXT
+                            )
                         )
-                    )
-                    .append(
-                        Component.text(
-                            ".",
-                            NamedTextColor.RED
+                        .append(
+                            InstigateTheme.error(
+                                "."
+                            )
                         )
-                    )
-                    .build()
+                        .build()
+                )
             );
 
             return;
@@ -359,17 +364,17 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
-            brand()
+            InstigateTheme.brand()
         );
 
         sender.sendMessage(
             Component.text(
-                "ADMINISTRATIVE RESET",
-                NamedTextColor.RED
+                "Administrative Reset",
+                InstigateTheme.ERROR
             ).decorate(
                 TextDecoration.BOLD
             )
@@ -380,18 +385,28 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            Component.text(
-                "This will permanently end Attempt #"
-                    + attempt
-                    + ".",
-                NamedTextColor.WHITE
-            )
+            Component.text()
+                .append(
+                    InstigateTheme.secondary(
+                        "This will permanently end "
+                    )
+                )
+                .append(
+                    InstigateTheme.attempt(
+                        attempt
+                    )
+                )
+                .append(
+                    InstigateTheme.secondary(
+                        "."
+                    )
+                )
+                .build()
         );
 
         sender.sendMessage(
-            Component.text(
-                "No player death will be recorded.",
-                NamedTextColor.GRAY
+            InstigateTheme.muted(
+                "No player death will be recorded."
             )
         );
 
@@ -402,16 +417,15 @@ public final class HardcoreCommand
         Component confirmationCommand =
             Component.text(
                 "/hc reset confirm",
-                NamedTextColor.GOLD
+                InstigateTheme.PURPLE
             )
                 .decorate(
                     TextDecoration.BOLD
                 )
                 .hoverEvent(
                     HoverEvent.showText(
-                        Component.text(
-                            "Click to place the confirmation command in chat.",
-                            NamedTextColor.GRAY
+                        InstigateTheme.secondary(
+                            "Click to place the confirmation command in chat."
                         )
                     )
                 )
@@ -424,25 +438,23 @@ public final class HardcoreCommand
         sender.sendMessage(
             Component.text()
                 .append(
-                    Component.text(
-                        "Run ",
-                        NamedTextColor.GRAY
+                    InstigateTheme.secondary(
+                        "Run "
                     )
                 )
                 .append(
                     confirmationCommand
                 )
                 .append(
-                    Component.text(
-                        " within 30 seconds to continue.",
-                        NamedTextColor.GRAY
+                    InstigateTheme.secondary(
+                        " within 30 seconds."
                     )
                 )
                 .build()
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
@@ -465,9 +477,10 @@ public final class HardcoreCommand
 
         if (confirmation == null) {
             sender.sendMessage(
-                Component.text(
-                    "No active reset confirmation. Run /hc reset first.",
-                    NamedTextColor.RED
+                InstigateTheme.chat(
+                    InstigateTheme.error(
+                        "No active reset confirmation. Run /hc reset first."
+                    )
                 )
             );
 
@@ -482,9 +495,10 @@ public final class HardcoreCommand
                 > confirmation.expiresAt()
         ) {
             sender.sendMessage(
-                Component.text(
-                    "Reset confirmation expired. Run /hc reset again.",
-                    NamedTextColor.RED
+                InstigateTheme.chat(
+                    InstigateTheme.error(
+                        "Reset confirmation expired. Run /hc reset again."
+                    )
                 )
             );
 
@@ -493,9 +507,10 @@ public final class HardcoreCommand
 
         if (!runManager.isActive()) {
             sender.sendMessage(
-                Component.text(
-                    "The attempt is no longer ACTIVE.",
-                    NamedTextColor.RED
+                InstigateTheme.chat(
+                    InstigateTheme.error(
+                        "The attempt is no longer active."
+                    )
                 )
             );
 
@@ -511,13 +526,26 @@ public final class HardcoreCommand
                 != currentAttempt
         ) {
             sender.sendMessage(
-                Component.text(
-                    "That confirmation was for Attempt #"
-                        + confirmation.attempt()
-                        + ", but the server is now on Attempt #"
-                        + currentAttempt
-                        + ". Run /hc reset again.",
-                    NamedTextColor.RED
+                InstigateTheme.chat(
+                    Component.text()
+                        .append(
+                            InstigateTheme.error(
+                                "That confirmation was for Attempt #"
+                                    + confirmation.attempt()
+                                    + ", but the server is now on "
+                            )
+                        )
+                        .append(
+                            InstigateTheme.attempt(
+                                currentAttempt
+                            )
+                        )
+                        .append(
+                            InstigateTheme.error(
+                                ". Run /hc reset again."
+                            )
+                        )
+                        .build()
                 )
             );
 
@@ -532,9 +560,10 @@ public final class HardcoreCommand
 
         if (!ended) {
             sender.sendMessage(
-                Component.text(
-                    "The attempt could not be reset because it is no longer ACTIVE.",
-                    NamedTextColor.RED
+                InstigateTheme.chat(
+                    InstigateTheme.error(
+                        "The attempt could not be reset because it is no longer active."
+                    )
                 )
             );
         }
@@ -575,9 +604,10 @@ public final class HardcoreCommand
                 !(sender instanceof Player player)
             ) {
                 sender.sendMessage(
-                    Component.text(
-                        "Console must specify a player: /hc stats <player>",
-                        NamedTextColor.RED
+                    InstigateTheme.chat(
+                        InstigateTheme.error(
+                            "Console must specify a player: /hc stats <player>"
+                        )
                     )
                 );
 
@@ -595,9 +625,10 @@ public final class HardcoreCommand
 
         if (args.length > 2) {
             sender.sendMessage(
-                Component.text(
-                    "Usage: /hc stats [player]",
-                    NamedTextColor.RED
+                InstigateTheme.chat(
+                    InstigateTheme.error(
+                        "Usage: /hc stats [player]"
+                    )
                 )
             );
 
@@ -611,26 +642,26 @@ public final class HardcoreCommand
 
         if (target.isEmpty()) {
             sender.sendMessage(
-                Component.text()
-                    .append(
-                        Component.text(
-                            "No hardcore statistics found for ",
-                            NamedTextColor.RED
+                InstigateTheme.chat(
+                    Component.text()
+                        .append(
+                            InstigateTheme.error(
+                                "No hardcore statistics found for "
+                            )
                         )
-                    )
-                    .append(
-                        Component.text(
-                            args[1],
-                            NamedTextColor.WHITE
+                        .append(
+                            Component.text(
+                                args[1],
+                                InstigateTheme.TEXT
+                            )
                         )
-                    )
-                    .append(
-                        Component.text(
-                            ".",
-                            NamedTextColor.RED
+                        .append(
+                            InstigateTheme.error(
+                                "."
+                            )
                         )
-                    )
-                    .build()
+                        .build()
+                )
             );
 
             return;
@@ -709,39 +740,29 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
-            brand()
+            InstigateTheme.brand()
         );
 
-        Component statsHeading =
-            Component.text(
-                name,
-                NamedTextColor.RED
-            )
-                .decorate(
-                    TextDecoration.BOLD
-                )
-                .hoverEvent(
-                    HoverEvent.showText(
-                        Component.text(
-                            "Hardcore statistics for "
-                                + name,
-                            NamedTextColor.GRAY
-                        )
+        sender.sendMessage(
+            Component.text()
+                .append(
+                    Component.text(
+                        name,
+                        InstigateTheme.TEXT
+                    ).decorate(
+                        TextDecoration.BOLD
                     )
                 )
                 .append(
-                    Component.text(
-                        " — PLAYER STATS",
-                        NamedTextColor.RED
+                    InstigateTheme.muted(
+                        "  /  Player Stats"
                     )
-                );
-
-        sender.sendMessage(
-            statsHeading
+                )
+                .build()
         );
 
         sender.sendMessage(
@@ -755,8 +776,8 @@ public final class HardcoreCommand
                 deaths
             ),
             deaths > 0
-                ? NamedTextColor.RED
-                : NamedTextColor.GREEN
+                ? InstigateTheme.PURPLE
+                : InstigateTheme.TEXT
         );
 
         sendStatusEntry(
@@ -765,7 +786,7 @@ public final class HardcoreCommand
             Integer.toString(
                 attemptsPlayed
             ),
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
 
         sendStatusEntry(
@@ -774,7 +795,7 @@ public final class HardcoreCommand
             formatPlaytime(
                 totalPlaytimeMillis
             ),
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
 
         sendStatusEntry(
@@ -783,7 +804,7 @@ public final class HardcoreCommand
             formatPlaytime(
                 averagePlaytimeMillis
             ),
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
 
         if (
@@ -806,14 +827,14 @@ public final class HardcoreCommand
                     + " ("
                     + count
                     + ")",
-                NamedTextColor.RED
+                InstigateTheme.PURPLE
             );
         } else {
             sendStatusEntry(
                 sender,
                 "Most Killed By",
                 "None",
-                NamedTextColor.GRAY
+                InstigateTheme.MUTED
             );
         }
 
@@ -822,19 +843,15 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            Component.text(
-                "LATEST DEATHS",
-                NamedTextColor.GOLD
-            ).decorate(
-                TextDecoration.BOLD
+            InstigateTheme.subheading(
+                "Latest Deaths"
             )
         );
 
         if (latestDeaths.isEmpty()) {
             sender.sendMessage(
-                Component.text(
-                    "No recorded deaths.",
-                    NamedTextColor.DARK_GRAY
+                InstigateTheme.muted(
+                    "No recorded deaths."
                 )
             );
         } else {
@@ -848,50 +865,46 @@ public final class HardcoreCommand
                             Component.text(
                                 "#"
                                     + death.attempt(),
-                                NamedTextColor.GOLD
+                                InstigateTheme.PURPLE
                             )
                         )
                         .append(
-                            Component.text(
-                                "  ",
-                                NamedTextColor.DARK_GRAY
+                            InstigateTheme.muted(
+                                "  "
                             )
                         )
                         .append(
                             Component.text(
                                 death.cause(),
-                                NamedTextColor.RED
+                                InstigateTheme.TEXT
                             )
                         )
                         .append(
-                            Component.text(
-                                "  •  ",
-                                NamedTextColor.DARK_GRAY
+                            InstigateTheme.muted(
+                                "  ·  "
                             )
                         )
                         .append(
-                            Component.text(
+                            InstigateTheme.secondary(
                                 formatRelativeTime(
                                     death.timestamp()
-                                ),
-                                NamedTextColor.GRAY
+                                )
                             )
                         )
                         .build()
                 );
 
                 sender.sendMessage(
-                    Component.text(
+                    InstigateTheme.muted(
                         "   "
-                            + death.message(),
-                        NamedTextColor.DARK_GRAY
+                            + death.message()
                     )
                 );
             }
         }
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
@@ -917,17 +930,16 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
-            brand()
+            InstigateTheme.brand()
         );
 
         sender.sendMessage(
-            Component.text(
-                "DEATH LEADERBOARD",
-                NamedTextColor.RED
+            InstigateTheme.subheading(
+                "Death Leaderboard"
             )
         );
 
@@ -937,9 +949,8 @@ public final class HardcoreCommand
 
         if (leaderboard.isEmpty()) {
             sender.sendMessage(
-                Component.text(
-                    "No players have been recorded yet.",
-                    NamedTextColor.DARK_GRAY
+                InstigateTheme.muted(
+                    "No players have been recorded yet."
                 )
             );
         } else {
@@ -965,16 +976,23 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            Component.text(
-                "Current Attempt: #"
-                    + statsManager
-                        .getCurrentAttempt(),
-                NamedTextColor.GRAY
-            )
+            Component.text()
+                .append(
+                    InstigateTheme.secondary(
+                        "Current Attempt  "
+                    )
+                )
+                .append(
+                    InstigateTheme.attempt(
+                        statsManager
+                            .getCurrentAttempt()
+                    )
+                )
+                .build()
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
@@ -996,19 +1014,18 @@ public final class HardcoreCommand
                     Component.text(
                         rank
                             + ". ",
-                        NamedTextColor.GOLD
+                        InstigateTheme.MUTED
                     )
                 )
                 .append(
                     clickablePlayerName(
                         player.name(),
-                        NamedTextColor.WHITE
+                        InstigateTheme.TEXT
                     )
                 )
                 .append(
-                    Component.text(
-                        "  •  ",
-                        NamedTextColor.DARK_GRAY
+                    InstigateTheme.muted(
+                        "  ·  "
                     )
                 )
                 .append(
@@ -1021,8 +1038,8 @@ public final class HardcoreCommand
                                     : "s"
                             ),
                         deaths > 0
-                            ? NamedTextColor.RED
-                            : NamedTextColor.GRAY
+                            ? InstigateTheme.PURPLE
+                            : InstigateTheme.MUTED
                     )
                 )
                 .build()
@@ -1046,10 +1063,7 @@ public final class HardcoreCommand
                 );
 
         Component details =
-            Component.text(
-                "   ",
-                NamedTextColor.DARK_GRAY
-            );
+            Component.empty();
 
         boolean hasDetails =
             false;
@@ -1069,20 +1083,18 @@ public final class HardcoreCommand
 
             details =
                 details.append(
-                    Component.text(
-                        "Most: ",
-                        NamedTextColor.DARK_GRAY
+                    InstigateTheme.muted(
+                        "   Most  "
                     )
                 );
 
             details =
                 details.append(
-                    Component.text(
+                    InstigateTheme.secondary(
                         cause
                             + " ("
                             + count
-                            + ")",
-                        NamedTextColor.GRAY
+                            + ")"
                     )
                 );
 
@@ -1094,18 +1106,23 @@ public final class HardcoreCommand
             if (hasDetails) {
                 details =
                     details.append(
-                        Component.text(
-                            "  •  ",
-                            NamedTextColor.DARK_GRAY
+                        InstigateTheme.muted(
+                            "  ·  "
+                        )
+                    );
+            } else {
+                details =
+                    details.append(
+                        InstigateTheme.muted(
+                            "   "
                         )
                     );
             }
 
             details =
                 details.append(
-                    Component.text(
-                        "Latest: ",
-                        NamedTextColor.DARK_GRAY
+                    InstigateTheme.muted(
+                        "Latest  "
                     )
                 );
 
@@ -1116,7 +1133,7 @@ public final class HardcoreCommand
                             + latest
                                 .getFirst()
                                 .attempt(),
-                        NamedTextColor.GRAY
+                        InstigateTheme.SECONDARY
                     )
                 );
 
@@ -1170,17 +1187,16 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
-            brand()
+            InstigateTheme.brand()
         );
 
         sender.sendMessage(
-            Component.text(
-                "SERVER STATUS",
-                NamedTextColor.RED
+            InstigateTheme.subheading(
+                "Server Status"
             )
         );
 
@@ -1193,18 +1209,20 @@ public final class HardcoreCommand
             "Attempt",
             "#"
                 + attempt,
-            NamedTextColor.GOLD
+            InstigateTheme.PURPLE
         );
 
         sendStatusEntry(
             sender,
             "State",
-            runManager
-                .getState()
-                .name(),
+            formatEnumLabel(
+                runManager
+                    .getState()
+                    .name()
+            ),
             runManager.isActive()
-                ? NamedTextColor.GREEN
-                : NamedTextColor.RED
+                ? InstigateTheme.AZURE
+                : InstigateTheme.PURPLE
         );
 
         sendStatusEntry(
@@ -1214,7 +1232,7 @@ public final class HardcoreCommand
                 runManager
                     .getElapsedTime()
             ),
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
 
         sender.sendMessage(
@@ -1224,11 +1242,8 @@ public final class HardcoreCommand
         sender.sendMessage(
             Component.text()
                 .append(
-                    Component.text(
-                        "PLAYERS  ",
-                        NamedTextColor.GOLD
-                    ).decorate(
-                        TextDecoration.BOLD
+                    InstigateTheme.secondary(
+                        "Players  "
                     )
                 )
                 .append(
@@ -1236,7 +1251,7 @@ public final class HardcoreCommand
                         activeOnline
                             + " / "
                             + participants.size(),
-                        NamedTextColor.WHITE
+                        InstigateTheme.TEXT
                     )
                 )
                 .build()
@@ -1244,9 +1259,8 @@ public final class HardcoreCommand
 
         if (participants.isEmpty()) {
             sender.sendMessage(
-                Component.text(
-                    "No participants have entered this attempt yet.",
-                    NamedTextColor.DARK_GRAY
+                InstigateTheme.muted(
+                    "No participants have entered this attempt yet."
                 )
             );
         } else {
@@ -1268,30 +1282,29 @@ public final class HardcoreCommand
         if (active != null) {
             sendStatusEntry(
                 sender,
-                "ACTIVE WORLD",
+                "Active",
                 "Attempt #"
                     + active
                         .attemptNumber(),
-                NamedTextColor.GREEN
+                InstigateTheme.AZURE
             );
         }
 
         if (standby != null) {
             sendStatusEntry(
                 sender,
-                "STANDBY WORLD",
+                "Standby",
                 "Attempt #"
                     + standby
-                        .attemptNumber()
-                    + " • Ready",
-                NamedTextColor.AQUA
+                        .attemptNumber(),
+                InstigateTheme.PURPLE
             );
         } else {
             sendStatusEntry(
                 sender,
-                "STANDBY WORLD",
+                "Standby",
                 "Preparing",
-                NamedTextColor.YELLOW
+                InstigateTheme.SECONDARY
             );
         }
 
@@ -1304,12 +1317,12 @@ public final class HardcoreCommand
             "Rotation",
             worldRotationManager
                 .isRotationInProgress()
-                ? "In Progress"
+                ? "Running"
                 : "Idle",
             worldRotationManager
                 .isRotationInProgress()
-                ? NamedTextColor.YELLOW
-                : NamedTextColor.GRAY
+                ? InstigateTheme.PURPLE
+                : InstigateTheme.MUTED
         );
 
         sendStatusEntry(
@@ -1317,16 +1330,16 @@ public final class HardcoreCommand
             "Cleanup",
             worldCleanupManager
                 .isCleanupInProgress()
-                ? "In Progress"
+                ? "Running"
                 : "Idle",
             worldCleanupManager
                 .isCleanupInProgress()
-                ? NamedTextColor.YELLOW
-                : NamedTextColor.GRAY
+                ? InstigateTheme.PURPLE
+                : InstigateTheme.MUTED
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
@@ -1354,34 +1367,34 @@ public final class HardcoreCommand
                         player.getWorld()
                     );
 
-        NamedTextColor nameColor =
+        TextColor nameColor =
             active
-                ? NamedTextColor.GREEN
+                ? InstigateTheme.TEXT
                 : online
-                    ? NamedTextColor.YELLOW
-                    : NamedTextColor.GRAY;
+                    ? InstigateTheme.SECONDARY
+                    : InstigateTheme.MUTED;
 
         String state;
-        NamedTextColor stateColor;
+        TextColor stateColor;
 
         if (active) {
             state =
                 "Online";
 
             stateColor =
-                NamedTextColor.GREEN;
+                InstigateTheme.AZURE;
         } else if (online) {
             state =
-                "Online • Outside Run";
+                "Outside Run";
 
             stateColor =
-                NamedTextColor.YELLOW;
+                InstigateTheme.SECONDARY;
         } else {
             state =
                 "Offline";
 
             stateColor =
-                NamedTextColor.DARK_GRAY;
+                InstigateTheme.MUTED;
         }
 
         sender.sendMessage(
@@ -1393,9 +1406,8 @@ public final class HardcoreCommand
                     )
                 )
                 .append(
-                    Component.text(
-                        "  •  ",
-                        NamedTextColor.DARK_GRAY
+                    InstigateTheme.muted(
+                        "  ·  "
                     )
                 )
                 .append(
@@ -1450,17 +1462,16 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
-            brand()
+            InstigateTheme.brand()
         );
 
         sender.sendMessage(
-            Component.text(
-                "WORLD DIAGNOSTICS",
-                NamedTextColor.RED
+            InstigateTheme.subheading(
+                "World Diagnostics"
             )
         );
 
@@ -1470,9 +1481,9 @@ public final class HardcoreCommand
 
         sendWorldSetSection(
             sender,
-            "ACTIVE",
+            "Active",
             active,
-            NamedTextColor.GREEN
+            InstigateTheme.AZURE
         );
 
         sender.sendMessage(
@@ -1481,9 +1492,9 @@ public final class HardcoreCommand
 
         sendWorldSetSection(
             sender,
-            "STANDBY",
+            "Standby",
             standby,
-            NamedTextColor.AQUA
+            InstigateTheme.PURPLE
         );
 
         sender.sendMessage(
@@ -1492,9 +1503,9 @@ public final class HardcoreCommand
 
         sendWorldSetSection(
             sender,
-            "RETIRED",
+            "Retired",
             retired,
-            NamedTextColor.GRAY
+            InstigateTheme.MUTED
         );
 
         sender.sendMessage(
@@ -1509,13 +1520,15 @@ public final class HardcoreCommand
             sendStatusEntry(
                 sender,
                 "Persistent Phase",
-                state
-                    .phase()
-                    .name(),
+                formatEnumLabel(
+                    state
+                        .phase()
+                        .name()
+                ),
                 state.phase()
                     == WorldRotationPhase.STABLE
-                        ? NamedTextColor.GREEN
-                        : NamedTextColor.YELLOW
+                        ? InstigateTheme.AZURE
+                        : InstigateTheme.PURPLE
             );
         } catch (
             IOException exception
@@ -1523,13 +1536,13 @@ public final class HardcoreCommand
             sendStatusEntry(
                 sender,
                 "Persistent Phase",
-                "ERROR",
-                NamedTextColor.RED
+                "Error",
+                InstigateTheme.ERROR
             );
         }
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
@@ -1541,7 +1554,7 @@ public final class HardcoreCommand
         CommandSender sender,
         String title,
         WorldSet worldSet,
-        NamedTextColor titleColor
+        TextColor titleColor
     ) {
         sender.sendMessage(
             Component.text(
@@ -1554,9 +1567,8 @@ public final class HardcoreCommand
 
         if (worldSet == null) {
             sender.sendMessage(
-                Component.text(
-                    "None",
-                    NamedTextColor.DARK_GRAY
+                InstigateTheme.muted(
+                    "None"
                 )
             );
 
@@ -1569,7 +1581,7 @@ public final class HardcoreCommand
             "#"
                 + worldSet
                     .attemptNumber(),
-            NamedTextColor.WHITE
+            InstigateTheme.PURPLE
         );
 
         sendStatusEntry(
@@ -1579,7 +1591,7 @@ public final class HardcoreCommand
                 worldSet
                     .seed()
             ),
-            NamedTextColor.GRAY
+            InstigateTheme.SECONDARY
         );
 
         sendStatusEntry(
@@ -1588,7 +1600,7 @@ public final class HardcoreCommand
             worldSet
                 .overworld()
                 .getName(),
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
 
         sendStatusEntry(
@@ -1597,7 +1609,7 @@ public final class HardcoreCommand
             worldSet
                 .nether()
                 .getName(),
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
 
         sendStatusEntry(
@@ -1606,7 +1618,7 @@ public final class HardcoreCommand
             worldSet
                 .end()
                 .getName(),
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
     }
 
@@ -1653,10 +1665,6 @@ public final class HardcoreCommand
             );
         }
 
-        /*
-         * Stats attempt should always agree with the loaded
-         * ACTIVE WorldSet.
-         */
         if (active == null) {
             warnings.add(
                 "ACTIVE WorldSet is missing."
@@ -1674,9 +1682,6 @@ public final class HardcoreCommand
             );
         }
 
-        /*
-         * Standby should always be one attempt ahead.
-         */
         if (
             active != null
                 && standby != null
@@ -1705,9 +1710,6 @@ public final class HardcoreCommand
             );
         }
 
-        /*
-         * Persistent state should agree with loaded state.
-         */
         if (
             persistentState != null
                 && active != null
@@ -1746,10 +1748,6 @@ public final class HardcoreCommand
             );
         }
 
-        /*
-         * ACTIVE gameplay should normally have persistent world
-         * state in STABLE.
-         */
         if (
             persistentState != null
                 && runManager.isActive()
@@ -1794,17 +1792,16 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
-            brand()
+            InstigateTheme.brand()
         );
 
         sender.sendMessage(
-            Component.text(
-                "DEBUG STATUS",
-                NamedTextColor.RED
+            InstigateTheme.subheading(
+                "Debug Status"
             )
         );
 
@@ -1815,28 +1812,32 @@ public final class HardcoreCommand
         sendStatusEntry(
             sender,
             "Run State",
-            runManager
-                .getState()
-                .name(),
+            formatEnumLabel(
+                runManager
+                    .getState()
+                    .name()
+            ),
             runManager.isActive()
-                ? NamedTextColor.GREEN
-                : NamedTextColor.YELLOW
+                ? InstigateTheme.AZURE
+                : InstigateTheme.PURPLE
         );
 
         sendStatusEntry(
             sender,
             "Persistent Phase",
             persistentState == null
-                ? "ERROR"
-                : persistentState
-                    .phase()
-                    .name(),
+                ? "Error"
+                : formatEnumLabel(
+                    persistentState
+                        .phase()
+                        .name()
+                ),
             persistentState == null
-                ? NamedTextColor.RED
+                ? InstigateTheme.ERROR
                 : persistentState.phase()
                     == WorldRotationPhase.STABLE
-                        ? NamedTextColor.GREEN
-                        : NamedTextColor.YELLOW
+                        ? InstigateTheme.AZURE
+                        : InstigateTheme.PURPLE
         );
 
         sender.sendMessage(
@@ -1848,7 +1849,7 @@ public final class HardcoreCommand
             "Stats Attempt",
             "#"
                 + statsAttempt,
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
 
         sendStatusEntry(
@@ -1860,8 +1861,8 @@ public final class HardcoreCommand
                     + active
                         .attemptNumber(),
             active == null
-                ? NamedTextColor.RED
-                : NamedTextColor.WHITE
+                ? InstigateTheme.ERROR
+                : InstigateTheme.AZURE
         );
 
         sendStatusEntry(
@@ -1873,8 +1874,8 @@ public final class HardcoreCommand
                     + standby
                         .attemptNumber(),
             standby == null
-                ? NamedTextColor.YELLOW
-                : NamedTextColor.WHITE
+                ? InstigateTheme.SECONDARY
+                : InstigateTheme.PURPLE
         );
 
         sendStatusEntry(
@@ -1885,9 +1886,7 @@ public final class HardcoreCommand
                 : "#"
                     + retired
                         .attemptNumber(),
-            retired == null
-                ? NamedTextColor.GRAY
-                : NamedTextColor.YELLOW
+            InstigateTheme.MUTED
         );
 
         sender.sendMessage(
@@ -1903,8 +1902,8 @@ public final class HardcoreCommand
                 : "Idle",
             countdownManager
                 .isRunning()
-                ? NamedTextColor.YELLOW
-                : NamedTextColor.GRAY
+                ? InstigateTheme.PURPLE
+                : InstigateTheme.MUTED
         );
 
         sendStatusEntry(
@@ -1916,8 +1915,8 @@ public final class HardcoreCommand
                 : "Idle",
             worldRotationManager
                 .isRotationInProgress()
-                ? NamedTextColor.YELLOW
-                : NamedTextColor.GRAY
+                ? InstigateTheme.PURPLE
+                : InstigateTheme.MUTED
         );
 
         sendStatusEntry(
@@ -1929,8 +1928,8 @@ public final class HardcoreCommand
                 : "Idle",
             worldCleanupManager
                 .isCleanupInProgress()
-                ? NamedTextColor.YELLOW
-                : NamedTextColor.GRAY
+                ? InstigateTheme.PURPLE
+                : InstigateTheme.MUTED
         );
 
         sender.sendMessage(
@@ -1943,16 +1942,16 @@ public final class HardcoreCommand
             Integer.toString(
                 onlinePlayers
             ),
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
 
         sendStatusEntry(
             sender,
-            "Players In ACTIVE",
+            "Players In Active",
             Integer.toString(
                 activePlayers
             ),
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
 
         sendStatusEntry(
@@ -1961,7 +1960,7 @@ public final class HardcoreCommand
             Integer.toString(
                 participants
             ),
-            NamedTextColor.WHITE
+            InstigateTheme.TEXT
         );
 
         sender.sendMessage(
@@ -1973,14 +1972,14 @@ public final class HardcoreCommand
                 sender,
                 "Integrity",
                 "OK",
-                NamedTextColor.GREEN
+                InstigateTheme.AZURE
             );
         } else {
             sendStatusEntry(
                 sender,
                 "Integrity",
-                "WARNING",
-                NamedTextColor.RED
+                "Warning",
+                InstigateTheme.ERROR
             );
 
             for (
@@ -1988,17 +1987,26 @@ public final class HardcoreCommand
                 warnings
             ) {
                 sender.sendMessage(
-                    Component.text(
-                        "- "
-                            + warning,
-                        NamedTextColor.RED
-                    )
+                    Component.text()
+                        .append(
+                            Component.text(
+                                "• ",
+                                InstigateTheme.ERROR
+                            )
+                        )
+                        .append(
+                            Component.text(
+                                warning,
+                                InstigateTheme.ERROR
+                            )
+                        )
+                        .build()
                 );
             }
         }
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
@@ -2020,17 +2028,16 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
-            brand()
+            InstigateTheme.brand()
         );
 
         sender.sendMessage(
-            Component.text(
-                "COMMANDS",
-                NamedTextColor.RED
+            InstigateTheme.subheading(
+                "Commands"
             )
         );
 
@@ -2053,19 +2060,19 @@ public final class HardcoreCommand
         sendHelpEntry(
             sender,
             "/hc stats",
-            "Show your personal hardcore statistics."
+            "Show your hardcore statistics."
         );
 
         sendHelpEntry(
             sender,
             "/hc stats <player>",
-            "Show another player's hardcore statistics."
+            "Show another player's statistics."
         );
 
         sendHelpEntry(
             sender,
             "/hc deaths",
-            "Show the server death leaderboard."
+            "Show the death leaderboard."
         );
 
         if (
@@ -2078,11 +2085,8 @@ public final class HardcoreCommand
             );
 
             sender.sendMessage(
-                Component.text(
-                    "ADMIN",
-                    NamedTextColor.RED
-                ).decorate(
-                    TextDecoration.BOLD
+                InstigateTheme.subheading(
+                    "Admin"
                 )
             );
 
@@ -2095,7 +2099,7 @@ public final class HardcoreCommand
             sendHelpEntry(
                 sender,
                 "/hc worlds",
-                "Show active, standby and retired world details."
+                "Inspect the world rotation pipeline."
             );
         }
 
@@ -2107,7 +2111,7 @@ public final class HardcoreCommand
             sendHelpEntry(
                 sender,
                 "/hc debug",
-                "Show internal hardcore diagnostics."
+                "Show internal state and integrity checks."
             );
         }
 
@@ -2116,14 +2120,13 @@ public final class HardcoreCommand
         );
 
         sender.sendMessage(
-            Component.text(
-                "Aliases: /hardcore, /hc",
-                NamedTextColor.DARK_GRAY
+            InstigateTheme.muted(
+                "Aliases  /hardcore  ·  /hc"
             )
         );
 
         sender.sendMessage(
-            divider()
+            InstigateTheme.divider()
         );
 
         sender.sendMessage(
@@ -2139,7 +2142,7 @@ public final class HardcoreCommand
 
     private Component clickablePlayerName(
         String name,
-        NamedTextColor color
+        TextColor color
     ) {
         return Component.text(
             name,
@@ -2147,11 +2150,10 @@ public final class HardcoreCommand
         )
             .hoverEvent(
                 HoverEvent.showText(
-                    Component.text(
+                    InstigateTheme.secondary(
                         "View "
                             + name
-                            + "'s hardcore stats",
-                        NamedTextColor.GRAY
+                            + "'s hardcore stats"
                     )
                 )
             )
@@ -2280,11 +2282,54 @@ public final class HardcoreCommand
         );
     }
 
+    private String formatEnumLabel(
+        String value
+    ) {
+        String[] words =
+            value
+                .toLowerCase(
+                    Locale.ROOT
+                )
+                .split("_");
+
+        StringBuilder result =
+            new StringBuilder();
+
+        for (
+            String word :
+            words
+        ) {
+            if (word.isBlank()) {
+                continue;
+            }
+
+            if (!result.isEmpty()) {
+                result.append(
+                    ' '
+                );
+            }
+
+            result.append(
+                Character.toUpperCase(
+                    word.charAt(0)
+                )
+            );
+
+            if (word.length() > 1) {
+                result.append(
+                    word.substring(1)
+                );
+            }
+        }
+
+        return result.toString();
+    }
+
     private void sendStatusEntry(
         CommandSender sender,
         String label,
         String value,
-        NamedTextColor valueColor
+        TextColor valueColor
     ) {
         sender.sendMessage(
             Component.text()
@@ -2292,7 +2337,7 @@ public final class HardcoreCommand
                     Component.text(
                         label
                             + "  ",
-                        NamedTextColor.GRAY
+                        InstigateTheme.SECONDARY
                     )
                 )
                 .append(
@@ -2318,13 +2363,12 @@ public final class HardcoreCommand
         Component commandComponent =
             Component.text(
                 syntax,
-                NamedTextColor.GOLD
+                InstigateTheme.PURPLE
             )
                 .hoverEvent(
                     HoverEvent.showText(
-                        Component.text(
-                            "Click to use this command.",
-                            NamedTextColor.GRAY
+                        InstigateTheme.secondary(
+                            "Click to use this command."
                         )
                     )
                 )
@@ -2340,15 +2384,13 @@ public final class HardcoreCommand
                     commandComponent
                 )
                 .append(
-                    Component.text(
-                        "  •  ",
-                        NamedTextColor.DARK_GRAY
+                    InstigateTheme.muted(
+                        "  ·  "
                     )
                 )
                 .append(
-                    Component.text(
-                        description,
-                        NamedTextColor.GRAY
+                    InstigateTheme.secondary(
+                        description
                     )
                 )
                 .build()
@@ -2389,31 +2431,44 @@ public final class HardcoreCommand
         return syntax;
     }
 
+    /*
+     * ------------------------------------------------------------
+     * DIRECT FEEDBACK
+     * ------------------------------------------------------------
+     */
+
     private void sendUnknownCommand(
         CommandSender sender,
         String subcommand
     ) {
         sender.sendMessage(
-            Component.text()
-                .append(
-                    Component.text(
-                        "Unknown hardcore command: ",
-                        NamedTextColor.RED
+            InstigateTheme.chat(
+                Component.text()
+                    .append(
+                        InstigateTheme.error(
+                            "Unknown command: "
+                        )
                     )
-                )
-                .append(
-                    Component.text(
-                        subcommand,
-                        NamedTextColor.WHITE
+                    .append(
+                        Component.text(
+                            subcommand,
+                            InstigateTheme.TEXT
+                        )
                     )
-                )
-                .build()
+                    .append(
+                        InstigateTheme.error(
+                            "."
+                        )
+                    )
+                    .build()
+            )
         );
 
         sender.sendMessage(
-            Component.text(
-                "Use /hc help to view available commands.",
-                NamedTextColor.GRAY
+            InstigateTheme.chat(
+                InstigateTheme.secondary(
+                    "Use /hc help to view available commands."
+                )
             )
         );
     }
@@ -2422,26 +2477,11 @@ public final class HardcoreCommand
         CommandSender sender
     ) {
         sender.sendMessage(
-            Component.text(
-                "You do not have permission to use that command.",
-                NamedTextColor.RED
+            InstigateTheme.chat(
+                InstigateTheme.error(
+                    "You do not have permission to use that command."
+                )
             )
-        );
-    }
-
-    private Component brand() {
-        return Component.text(
-            "INSTIGATE CAFE HARDCORE",
-            NamedTextColor.GOLD
-        ).decorate(
-            TextDecoration.BOLD
-        );
-    }
-
-    private Component divider() {
-        return Component.text(
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            NamedTextColor.DARK_GRAY
         );
     }
 

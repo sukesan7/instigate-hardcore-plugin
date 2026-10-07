@@ -1,10 +1,11 @@
 package dev.instigatehardcore.countdown;
 
-import net.kyori.adventure.key.Key;
-import net.kyori.adventure.sound.Sound;
+import dev.instigatehardcore.ui.InstigateTheme;
+
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.title.Title;
+
+import org.bukkit.Sound;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -14,25 +15,22 @@ import java.util.Objects;
 
 public final class CountdownManager {
 
-    private static final long TICKS_PER_SECOND = 20L;
-
-    private static final Key COUNTDOWN_SOUND =
-        Key.key("minecraft:block.note_block.hat");
-
-    private static final Key COMPLETION_SOUND =
-        Key.key("minecraft:entity.wither.death");
-
     private final JavaPlugin plugin;
+
     private final int durationSeconds;
 
     private BukkitTask countdownTask;
+
     private int remainingSeconds;
 
     public CountdownManager(
         JavaPlugin plugin,
         int durationSeconds
     ) {
-        this.plugin = Objects.requireNonNull(plugin);
+        this.plugin =
+            Objects.requireNonNull(
+                plugin
+            );
 
         if (durationSeconds < 1) {
             throw new IllegalArgumentException(
@@ -40,63 +38,64 @@ public final class CountdownManager {
             );
         }
 
-        this.durationSeconds = durationSeconds;
+        this.durationSeconds =
+            durationSeconds;
     }
 
-    /**
-     * Starts the run-ending countdown.
-     *
-     * Only one countdown may run at a time.
-     *
-     * @param attemptNumber current hardcore attempt number
-     * @param onComplete action to execute when the countdown reaches zero
-     * @return true if the countdown started
+    /*
+     * ------------------------------------------------------------
+     * COUNTDOWN
+     * ------------------------------------------------------------
      */
-    public synchronized boolean startCountdown(
+
+    public synchronized void startCountdown(
         int attemptNumber,
         Runnable onComplete
     ) {
-        Objects.requireNonNull(onComplete);
-
-        if (countdownTask != null) {
-            return false;
-        }
-
-        remainingSeconds = durationSeconds;
-
-        countdownTask = plugin
-            .getServer()
-            .getScheduler()
-            .runTaskTimer(
-                plugin,
-                () -> tick(attemptNumber, onComplete),
-                0L,
-                TICKS_PER_SECOND
-            );
-
-        plugin.getLogger().info(
-            "[Instigate Cafe Hardcore] "
-                + "Started "
-                + durationSeconds
-                + "-second reset countdown for attempt #"
-                + attemptNumber
-                + "."
+        Objects.requireNonNull(
+            onComplete
         );
 
-        return true;
+        cancel();
+
+        remainingSeconds =
+            durationSeconds;
+
+        /*
+         * Update immediately, then once every second.
+         */
+        countdownTask =
+            plugin.getServer()
+                .getScheduler()
+                .runTaskTimer(
+                    plugin,
+                    () -> tick(
+                        attemptNumber,
+                        onComplete
+                    ),
+                    0L,
+                    20L
+                );
     }
 
-    private void tick(
+    private synchronized void tick(
         int attemptNumber,
         Runnable onComplete
     ) {
         if (remainingSeconds <= 0) {
-            completeCountdown(onComplete);
+            finish(
+                onComplete
+            );
+
             return;
         }
 
         showCountdown(
             attemptNumber,
+            remainingSeconds
+        );
+
+        playCountdownSound(
             remainingSeconds
         );
 
@@ -107,146 +106,184 @@ public final class CountdownManager {
         int attemptNumber,
         int seconds
     ) {
-        NamedTextColor countdownColor;
-
-        if (seconds <= 3) {
-            countdownColor = NamedTextColor.RED;
-        } else if (seconds <= 5) {
-            countdownColor = NamedTextColor.GOLD;
-        } else {
-            countdownColor = NamedTextColor.YELLOW;
-        }
-
-        Component titleText = Component.text(
-            "INSTIGATE CAFE HARDCORE",
-            NamedTextColor.GOLD
-        );
-
-        Component subtitleText = Component.text()
-            .append(
-                Component.text(
-                    "Attempt #" + attemptNumber,
-                    NamedTextColor.GRAY
+        /*
+         * Minecraft does not expose arbitrary title scaling.
+         *
+         * Using the subtitle layer by itself gives us a smaller,
+         * cleaner centered countdown without requiring a client
+         * mod or resource pack.
+         */
+        Component countdownLine =
+            Component.text()
+                .append(
+                    Component.text(
+                        "Attempt #"
+                            + attemptNumber,
+                        InstigateTheme.PURPLE
+                    )
                 )
-            )
-            .append(
-                Component.text(
-                    "  •  Resetting in ",
-                    NamedTextColor.DARK_GRAY
+                .append(
+                    InstigateTheme.muted(
+                        "  ·  "
+                    )
                 )
-            )
-            .append(
-                Component.text(
-                    seconds + "s",
-                    countdownColor
+                .append(
+                    InstigateTheme.secondary(
+                        "Resetting in "
+                    )
                 )
-            )
-            .build();
+                .append(
+                    Component.text(
+                        seconds
+                            + "s",
+                        InstigateTheme.AZURE
+                    )
+                )
+                .build();
 
-        Title title = Title.title(
-            titleText,
-            subtitleText,
-            Title.Times.times(
-                Duration.ZERO,
-                Duration.ofMillis(1100),
-                Duration.ZERO
-            )
-        );
+        Title title =
+            Title.title(
+                Component.empty(),
+                countdownLine,
+                Title.Times.times(
+                    Duration.ZERO,
+                    Duration.ofMillis(
+                        1100
+                    ),
+                    Duration.ZERO
+                )
+            );
 
-        float pitch = seconds <= 3
-            ? 1.4f
-            : 1.1f;
-
-        Sound sound = Sound.sound(
-            COUNTDOWN_SOUND,
-            Sound.Source.MASTER,
-            0.7f,
-            pitch
-        );
-
-        for (Player player : plugin.getServer().getOnlinePlayers()) {
-            player.showTitle(title);
-            player.playSound(sound);
+        for (
+            Player player :
+            plugin.getServer()
+                .getOnlinePlayers()
+        ) {
+            player.showTitle(
+                title
+            );
         }
     }
 
-    private synchronized void completeCountdown(
-        Runnable onComplete
+    /*
+     * ------------------------------------------------------------
+     * SOUND
+     * ------------------------------------------------------------
+     */
+
+    private void playCountdownSound(
+        int seconds
     ) {
-        if (countdownTask == null) {
-            return;
+        /*
+         * Keep the countdown sound subtle.
+         *
+         * The final three seconds rise slightly in pitch.
+         */
+        float pitch;
+
+        if (seconds <= 1) {
+            pitch =
+                1.6f;
+        } else if (seconds == 2) {
+            pitch =
+                1.4f;
+        } else if (seconds == 3) {
+            pitch =
+                1.2f;
+        } else {
+            pitch =
+                1.0f;
         }
 
-        countdownTask.cancel();
-        countdownTask = null;
-        remainingSeconds = 0;
+        for (
+            Player player :
+            plugin.getServer()
+                .getOnlinePlayers()
+        ) {
+            player.playSound(
+                player.getLocation(),
+                Sound.BLOCK_NOTE_BLOCK_HAT,
+                0.35f,
+                pitch
+            );
+        }
+    }
 
-        showCompletionTitle();
+    /*
+     * ------------------------------------------------------------
+     * COMPLETION
+     * ------------------------------------------------------------
+     */
 
-        plugin.getLogger().info(
-            "[Instigate Cafe Hardcore] Reset countdown completed."
-        );
+    private synchronized void finish(
+        Runnable onComplete
+    ) {
+        if (countdownTask != null) {
+            countdownTask.cancel();
+
+            countdownTask =
+                null;
+        }
+
+        remainingSeconds =
+            0;
+
+        /*
+         * Remove the countdown before WorldRotationManager sends
+         * the fresh-attempt title.
+         */
+        for (
+            Player player :
+            plugin.getServer()
+                .getOnlinePlayers()
+        ) {
+            player.clearTitle();
+        }
 
         onComplete.run();
     }
 
-    private void showCompletionTitle() {
-        Component titleText = Component.text(
-            "INSTIGATE CAFE HARDCORE",
-            NamedTextColor.GOLD
-        );
-
-        Component subtitleText = Component.text(
-            "Preparing a new world...",
-            NamedTextColor.RED
-        );
-
-        Title title = Title.title(
-            titleText,
-            subtitleText,
-            Title.Times.times(
-                Duration.ofMillis(100),
-                Duration.ofSeconds(3),
-                Duration.ofMillis(500)
-            )
-        );
-
-        Sound sound = Sound.sound(
-            COMPLETION_SOUND,
-            Sound.Source.MASTER,
-            0.6f,
-            1.0f
-        );
-
-        for (Player player : plugin.getServer().getOnlinePlayers()) {
-            player.showTitle(title);
-            player.playSound(sound);
-        }
-    }
+    /*
+     * ------------------------------------------------------------
+     * CANCELLATION
+     * ------------------------------------------------------------
+     */
 
     public synchronized void cancel() {
-        if (countdownTask == null) {
-            return;
+        if (countdownTask != null) {
+            countdownTask.cancel();
+
+            countdownTask =
+                null;
         }
 
-        countdownTask.cancel();
-        countdownTask = null;
-        remainingSeconds = 0;
+        remainingSeconds =
+            0;
 
-        plugin.getLogger().info(
-            "[Instigate Cafe Hardcore] Countdown cancelled."
-        );
+        for (
+            Player player :
+            plugin.getServer()
+                .getOnlinePlayers()
+        ) {
+            player.clearTitle();
+        }
     }
+
+    /*
+     * ------------------------------------------------------------
+     * STATE
+     * ------------------------------------------------------------
+     */
 
     public synchronized boolean isRunning() {
         return countdownTask != null;
     }
 
-    public synchronized int getRemainingSeconds() {
-        return remainingSeconds;
-    }
-
     public int getDurationSeconds() {
         return durationSeconds;
+    }
+
+    public synchronized int getRemainingSeconds() {
+        return remainingSeconds;
     }
 }

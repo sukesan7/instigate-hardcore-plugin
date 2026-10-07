@@ -6,10 +6,9 @@ import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 import dev.instigatehardcore.stats.StatsManager;
 import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
+import dev.instigatehardcore.ui.InstigateTheme;
 
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.title.Title;
 
 import org.bukkit.GameMode;
@@ -55,13 +54,19 @@ public final class WorldRotationManager {
         HardcoreScoreboardManager scoreboardManager
     ) {
         this.plugin =
-            Objects.requireNonNull(plugin);
+            Objects.requireNonNull(
+                plugin
+            );
 
         this.runManager =
-            Objects.requireNonNull(runManager);
+            Objects.requireNonNull(
+                runManager
+            );
 
         this.statsManager =
-            Objects.requireNonNull(statsManager);
+            Objects.requireNonNull(
+                statsManager
+            );
 
         this.playerResetManager =
             Objects.requireNonNull(
@@ -98,7 +103,7 @@ public final class WorldRotationManager {
     public synchronized boolean rotateToStandby() {
         if (rotationInProgress) {
             plugin.getLogger().warning(
-                "[Instigate Cafe Hardcore] "
+                "[Instigate Cafe] "
                     + "World rotation is already in progress."
             );
 
@@ -107,7 +112,7 @@ public final class WorldRotationManager {
 
         if (!runManager.isResetting()) {
             plugin.getLogger().severe(
-                "[Instigate Cafe Hardcore] "
+                "[Instigate Cafe] "
                     + "World rotation requested while run state is "
                     + runManager.getState()
                     + "."
@@ -122,7 +127,7 @@ public final class WorldRotationManager {
 
         if (standby == null) {
             plugin.getLogger().severe(
-                "[Instigate Cafe Hardcore] "
+                "[Instigate Cafe] "
                     + "No standby WorldSet is available."
             );
 
@@ -141,7 +146,7 @@ public final class WorldRotationManager {
                 != expectedAttempt
         ) {
             plugin.getLogger().severe(
-                "[Instigate Cafe Hardcore] "
+                "[Instigate Cafe] "
                     + "Standby attempt mismatch. Expected #"
                     + expectedAttempt
                     + " but found #"
@@ -167,7 +172,7 @@ public final class WorldRotationManager {
             Exception exception
         ) {
             plugin.getLogger().severe(
-                "[Instigate Cafe Hardcore] "
+                "[Instigate Cafe] "
                     + "Seamless world rotation failed."
             );
 
@@ -191,13 +196,15 @@ public final class WorldRotationManager {
                 .getCurrentAttempt();
 
         int newAttempt =
-            standby.attemptNumber();
+            standby
+                .attemptNumber();
 
         Location newSpawn =
-            standby.getSpawnLocation();
+            standby
+                .getSpawnLocation();
 
         plugin.getLogger().info(
-            "[Instigate Cafe Hardcore] "
+            "[Instigate Cafe] "
                 + "Rotating attempt #"
                 + oldAttempt
                 + " -> #"
@@ -206,8 +213,10 @@ public final class WorldRotationManager {
         );
 
         /*
-         * Defensive safeguard. DeathListener normally closes these
-         * immediately when ACTIVE -> ENDING occurs.
+         * Death/admin reset normally closes these sessions when
+         * ACTIVE -> ENDING occurs.
+         *
+         * This is kept as a defensive safeguard.
          */
         try {
             telemetryManager
@@ -218,7 +227,8 @@ public final class WorldRotationManager {
             IOException exception
         ) {
             plugin.getLogger().severe(
-                "Failed to finalize telemetry for attempt #"
+                "[Instigate Cafe] "
+                    + "Failed to finalize telemetry for attempt #"
                     + oldAttempt
                     + " before rotation."
             );
@@ -228,21 +238,30 @@ public final class WorldRotationManager {
 
         /*
          * Persist ROTATING before moving the first player.
+         *
+         * If Paper stops after this point, Phase 6 recovery will
+         * finish promotion on the next startup.
          */
         worldSetManager
             .beginRotation();
 
+        /*
+         * Make sure the incoming attempt exists in persistent
+         * participation history before players are transferred.
+         */
         participantManager
             .ensureAttempt(
                 newAttempt
             );
 
         /*
-         * Move everyone currently connected into the prepared
-         * standby attempt.
+         * Transfer every currently connected player into the
+         * prepared standby attempt.
          *
-         * Participation is persisted immediately. Playtime does
-         * not begin yet because RunManager is still RESETTING.
+         * Participation is persisted immediately.
+         *
+         * Telemetry does NOT begin here because RunManager is
+         * still RESETTING.
          */
         for (
             Player player :
@@ -263,10 +282,18 @@ public final class WorldRotationManager {
                 );
         }
 
+        /*
+         * Promote the standby world to ACTIVE and persist the new
+         * STABLE world-state metadata.
+         */
         WorldSet retiredWorldSet =
             worldSetManager
                 .promoteStandby();
 
+        /*
+         * Campaign attempt number advances only after the new
+         * world has successfully become authoritative.
+         */
         int advancedAttempt =
             statsManager
                 .advanceAttempt();
@@ -287,14 +314,18 @@ public final class WorldRotationManager {
         /*
          * RESETTING -> ACTIVE.
          */
-        if (!runManager.beginNextRun()) {
+        if (
+            !runManager
+                .beginNextRun()
+        ) {
             throw new IllegalStateException(
                 "Unable to transition new attempt to ACTIVE."
             );
         }
 
         /*
-         * Only now does gameplay time for the new attempt begin.
+         * Gameplay time for the new attempt begins only after the
+         * new attempt is actually ACTIVE.
          */
         for (
             Player player :
@@ -302,20 +333,23 @@ public final class WorldRotationManager {
                 .getOnlinePlayers()
         ) {
             if (
-                worldSetManager.isActiveWorld(
-                    player.getWorld()
-                )
+                worldSetManager
+                    .isActiveWorld(
+                        player.getWorld()
+                    )
             ) {
-                telemetryManager.beginSession(
-                    newAttempt,
-                    player.getUniqueId(),
-                    player.getName()
-                );
+                telemetryManager
+                    .beginSession(
+                        newAttempt,
+                        player.getUniqueId(),
+                        player.getName()
+                    );
             }
         }
 
         if (scoreboardManager != null) {
-            scoreboardManager.refresh();
+            scoreboardManager
+                .refresh();
         }
 
         announceNewAttempt(
@@ -323,7 +357,7 @@ public final class WorldRotationManager {
         );
 
         plugin.getLogger().info(
-            "[Instigate Cafe Hardcore] "
+            "[Instigate Cafe] "
                 + "Attempt #"
                 + newAttempt
                 + " is now ACTIVE with "
@@ -334,6 +368,10 @@ public final class WorldRotationManager {
                 + " participant(s)."
         );
 
+        /*
+         * The old ACTIVE set can now be safely unloaded and
+         * deleted.
+         */
         boolean cleanupScheduled =
             worldCleanupManager
                 .scheduleCleanup(
@@ -342,13 +380,23 @@ public final class WorldRotationManager {
 
         if (!cleanupScheduled) {
             plugin.getLogger().severe(
-                "[Instigate Cafe Hardcore] "
+                "[Instigate Cafe] "
                     + "Retired world cleanup could not be scheduled."
             );
         }
 
+        /*
+         * Give the newly-active attempt a moment to settle before
+         * generating the next standby WorldSet.
+         */
         scheduleReplacementStandby();
     }
+
+    /*
+     * ------------------------------------------------------------
+     * STANDBY GENERATION
+     * ------------------------------------------------------------
+     */
 
     private void scheduleReplacementStandby() {
         plugin.getServer()
@@ -361,14 +409,14 @@ public final class WorldRotationManager {
                             .createReplacementStandby();
 
                         plugin.getLogger().info(
-                            "[Instigate Cafe Hardcore] "
+                            "[Instigate Cafe] "
                                 + "Replacement standby world is ready."
                         );
                     } catch (
                         IOException exception
                     ) {
                         plugin.getLogger().severe(
-                            "[Instigate Cafe Hardcore] "
+                            "[Instigate Cafe] "
                                 + "Failed to create replacement "
                                 + "standby WorldSet."
                         );
@@ -376,11 +424,10 @@ public final class WorldRotationManager {
                         exception.printStackTrace();
 
                         plugin.getServer().broadcast(
-                            Component.text(
-                                "[Instigate Cafe Hardcore] "
-                                    + "Warning: the next standby "
-                                    + "world could not be prepared.",
-                                NamedTextColor.RED
+                            InstigateTheme.chat(
+                                InstigateTheme.error(
+                                    "The next standby world could not be prepared."
+                                )
                             )
                         );
                     }
@@ -389,22 +436,30 @@ public final class WorldRotationManager {
             );
     }
 
+    /*
+     * ------------------------------------------------------------
+     * NEW ATTEMPT UI
+     * ------------------------------------------------------------
+     */
+
     private void announceNewAttempt(
         int attemptNumber
     ) {
+        /*
+         * Titles do not use the chat prefix.
+         *
+         * Azure brand + purple attempt number keeps the visual
+         * hierarchy simple.
+         */
         Component titleText =
-            Component.text(
-                "INSTIGATE CAFE HARDCORE",
-                NamedTextColor.GOLD
-            ).decorate(
-                TextDecoration.BOLD
-            );
+            InstigateTheme
+                .brand();
 
         Component subtitleText =
             Component.text(
                 "Attempt #"
                     + attemptNumber,
-                NamedTextColor.GREEN
+                InstigateTheme.PURPLE
             );
 
         Title title =
@@ -412,29 +467,43 @@ public final class WorldRotationManager {
                 titleText,
                 subtitleText,
                 Title.Times.times(
-                    Duration.ofMillis(250),
-                    Duration.ofSeconds(3),
-                    Duration.ofMillis(750)
+                    Duration.ofMillis(
+                        250
+                    ),
+                    Duration.ofSeconds(
+                        3
+                    ),
+                    Duration.ofMillis(
+                        750
+                    )
                 )
             );
 
+        /*
+         * Every plugin-originated ordinary chat message uses the
+         * [Instigate Cafe] prefix.
+         */
         Component chatMessage =
-            Component.text()
-                .append(
-                    Component.text(
-                        "[Instigate Cafe Hardcore] ",
-                        NamedTextColor.GOLD
+            InstigateTheme.chat(
+                Component.text()
+                    .append(
+                        InstigateTheme.attempt(
+                            attemptNumber
+                        )
                     )
-                )
-                .append(
-                    Component.text(
-                        "Attempt #"
-                            + attemptNumber
-                            + " has begun.",
-                        NamedTextColor.GREEN
+                    .append(
+                        InstigateTheme.secondary(
+                            " has begun. "
+                        )
                     )
-                )
-                .build();
+                    .append(
+                        Component.text(
+                            "good luck.",
+                            InstigateTheme.TEXT
+                        )
+                    )
+                    .build()
+            );
 
         for (
             Player player :
@@ -450,6 +519,12 @@ public final class WorldRotationManager {
             );
         }
     }
+
+    /*
+     * ------------------------------------------------------------
+     * EMERGENCY SAFETY
+     * ------------------------------------------------------------
+     */
 
     private void moveEveryoneToSafety() {
         Location lobbySpawn =
@@ -469,17 +544,20 @@ public final class WorldRotationManager {
                 .getOnlinePlayers()
         ) {
             /*
-             * A failed rotation must not leave playtime running.
+             * A failed rotation must never leave ACTIVE playtime
+             * accumulating.
              */
             try {
-                telemetryManager.endSession(
-                    player.getUniqueId()
-                );
+                telemetryManager
+                    .endSession(
+                        player.getUniqueId()
+                    );
             } catch (
                 IOException exception
             ) {
                 plugin.getLogger().severe(
-                    "Unable to close telemetry session for "
+                    "[Instigate Cafe] "
+                        + "Unable to close telemetry session for "
                         + player.getName()
                         + " during emergency recovery."
                 );
@@ -493,6 +571,10 @@ public final class WorldRotationManager {
                         player
                     );
 
+                /*
+                 * Schedule the actual lobby teleport onto the
+                 * normal server task queue.
+                 */
                 plugin.getServer()
                     .getScheduler()
                     .runTask(
@@ -509,7 +591,8 @@ public final class WorldRotationManager {
 
                             if (!teleported) {
                                 plugin.getLogger().severe(
-                                    "Unable to teleport "
+                                    "[Instigate Cafe] "
+                                        + "Unable to teleport "
                                         + player.getName()
                                         + " to the safety lobby."
                                 );
@@ -526,7 +609,8 @@ public final class WorldRotationManager {
                 Exception exception
             ) {
                 plugin.getLogger().severe(
-                    "Unable to move "
+                    "[Instigate Cafe] "
+                        + "Unable to move "
                         + player.getName()
                         + " to the safety lobby."
                 );
@@ -535,16 +619,26 @@ public final class WorldRotationManager {
             }
         }
 
+        /*
+         * This is a genuine failure condition, so the theme's
+         * soft-red ERROR colour is appropriate here.
+         */
         plugin.getServer().broadcast(
-            Component.text(
-                "[Instigate Cafe Hardcore] "
-                    + "World rotation failed. "
-                    + "Players have been moved to the safety lobby. "
-                    + "A server restart will recover the world pipeline.",
-                NamedTextColor.RED
+            InstigateTheme.chat(
+                InstigateTheme.error(
+                    "World rotation failed. Players were moved to the "
+                        + "safety lobby. Restart the server to recover "
+                        + "the world pipeline."
+                )
             )
         );
     }
+
+    /*
+     * ------------------------------------------------------------
+     * DIAGNOSTICS
+     * ------------------------------------------------------------
+     */
 
     public synchronized boolean isRotationInProgress() {
         return rotationInProgress;

@@ -3,38 +3,54 @@ package dev.instigatehardcore.scoreboard;
 import dev.instigatehardcore.core.RunManager;
 import dev.instigatehardcore.stats.PlayerStats;
 import dev.instigatehardcore.stats.StatsManager;
+import dev.instigatehardcore.ui.InstigateTheme;
+
 import io.papermc.paper.scoreboard.numbers.NumberFormat;
+
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
+
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
+
 import org.bukkit.scoreboard.Criteria;
 import org.bukkit.scoreboard.DisplaySlot;
 import org.bukkit.scoreboard.Objective;
 import org.bukkit.scoreboard.Score;
 import org.bukkit.scoreboard.Scoreboard;
+import org.bukkit.scoreboard.ScoreboardManager;
 
 import java.time.Duration;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 public final class HardcoreScoreboardManager {
 
-    private static final String OBJECTIVE_NAME =
-        "instigate_hardcore";
+    /*
+     * We deliberately stay below Minecraft's sidebar line limit.
+     *
+     * If the server has many historical players, the scoreboard
+     * shows the highest death totals and summarizes the rest.
+     */
+    private static final int MAX_DEATH_ROWS =
+        9;
 
-    private static final int MAX_LINES = 15;
+    private static final String OBJECTIVE_NAME =
+        "instigate_hc";
 
     private final JavaPlugin plugin;
+
     private final RunManager runManager;
     private final StatsManager statsManager;
+
     private final long updateIntervalTicks;
 
-    private final Scoreboard scoreboard;
-    private final Objective objective;
+    private Scoreboard scoreboard;
+    private Objective objective;
 
     private BukkitTask updateTask;
 
@@ -44,11 +60,22 @@ public final class HardcoreScoreboardManager {
         StatsManager statsManager,
         long updateIntervalTicks
     ) {
-        this.plugin = Objects.requireNonNull(plugin);
-        this.runManager = Objects.requireNonNull(runManager);
-        this.statsManager = Objects.requireNonNull(statsManager);
+        this.plugin =
+            Objects.requireNonNull(
+                plugin
+            );
 
-        if (updateIntervalTicks < 1) {
+        this.runManager =
+            Objects.requireNonNull(
+                runManager
+            );
+
+        this.statsManager =
+            Objects.requireNonNull(
+                statsManager
+            );
+
+        if (updateIntervalTicks < 1L) {
             throw new IllegalArgumentException(
                 "Scoreboard update interval must be at least one tick."
             );
@@ -56,100 +83,158 @@ public final class HardcoreScoreboardManager {
 
         this.updateIntervalTicks =
             updateIntervalTicks;
-
-        org.bukkit.scoreboard.ScoreboardManager
-            bukkitScoreboardManager =
-                Objects.requireNonNull(
-                    plugin.getServer()
-                        .getScoreboardManager(),
-                    "Bukkit ScoreboardManager is unavailable."
-                );
-
-        this.scoreboard =
-            bukkitScoreboardManager.getNewScoreboard();
-
-        this.objective =
-            scoreboard.registerNewObjective(
-                OBJECTIVE_NAME,
-                Criteria.DUMMY,
-                Component.text(
-                    "INSTIGATE CAFE HARDCORE",
-                    NamedTextColor.GOLD
-                ).decorate(TextDecoration.BOLD)
-            );
-
-        objective.setDisplaySlot(
-            DisplaySlot.SIDEBAR
-        );
-
-        /*
-         * Hide Minecraft's normal numerical score values.
-         *
-         * We only use scores internally to control line order.
-         */
-        objective.numberFormat(
-            NumberFormat.blank()
-        );
     }
+
+    /*
+     * ------------------------------------------------------------
+     * LIFECYCLE
+     * ------------------------------------------------------------
+     */
 
     public void start() {
         if (updateTask != null) {
             return;
         }
 
+        ensureScoreboard();
+
+        for (
+            Player player :
+            Bukkit.getOnlinePlayers()
+        ) {
+            assign(
+                player
+            );
+        }
+
         refresh();
 
-        updateTask = plugin
-            .getServer()
-            .getScheduler()
-            .runTaskTimer(
-                plugin,
-                this::refresh,
-                updateIntervalTicks,
-                updateIntervalTicks
-            );
-
-        plugin.getLogger().info(
-            "[Instigate Cafe Hardcore] "
-                + "Scoreboard updater started."
-        );
+        updateTask =
+            Bukkit.getScheduler()
+                .runTaskTimer(
+                    plugin,
+                    this::refresh,
+                    updateIntervalTicks,
+                    updateIntervalTicks
+                );
     }
 
     public void stop() {
-        if (updateTask == null) {
+        if (updateTask != null) {
+            updateTask.cancel();
+
+            updateTask =
+                null;
+        }
+
+        if (scoreboard == null) {
             return;
         }
 
-        updateTask.cancel();
-        updateTask = null;
+        ScoreboardManager scoreboardManager =
+            Bukkit.getScoreboardManager();
 
-        plugin.getLogger().info(
-            "[Instigate Cafe Hardcore] "
-                + "Scoreboard updater stopped."
-        );
+        if (scoreboardManager == null) {
+            return;
+        }
+
+        Scoreboard main =
+            scoreboardManager
+                .getMainScoreboard();
+
+        for (
+            Player player :
+            Bukkit.getOnlinePlayers()
+        ) {
+            if (
+                player.getScoreboard()
+                    == scoreboard
+            ) {
+                player.setScoreboard(
+                    main
+                );
+            }
+        }
     }
 
-    public void assign(Player player) {
-        Objects.requireNonNull(player);
+    /*
+     * ------------------------------------------------------------
+     * PLAYER ASSIGNMENT
+     * ------------------------------------------------------------
+     */
+
+    public void assign(
+        Player player
+    ) {
+        Objects.requireNonNull(
+            player
+        );
+
+        ensureScoreboard();
 
         player.setScoreboard(
             scoreboard
         );
     }
 
+    /*
+     * ------------------------------------------------------------
+     * REFRESH
+     * ------------------------------------------------------------
+     */
+
     public void refresh() {
+        ensureScoreboard();
+
+        /*
+         * Remove all old rows before rebuilding the compact view.
+         */
+        for (
+            String entry :
+            new ArrayList<>(
+                scoreboard.getEntries()
+            )
+        ) {
+            scoreboard.resetScores(
+                entry
+            );
+        }
+
         List<Component> lines =
             buildLines();
 
-        updateLines(lines);
+        int scoreValue =
+            lines.size();
 
         for (
-            Player player :
-            plugin.getServer().getOnlinePlayers()
+            int index = 0;
+            index < lines.size();
+            index++
         ) {
-            if (player.getScoreboard() != scoreboard) {
-                assign(player);
-            }
+            /*
+             * Each underlying score entry must be unique.
+             *
+             * The player never sees this key because Paper's
+             * customName component replaces its visible text.
+             */
+            String entry =
+                "ihc_line_"
+                    + index;
+
+            Score score =
+                objective.getScore(
+                    entry
+                );
+
+            score.setScore(
+                scoreValue--
+            );
+
+            score.customName(
+                lines.get(
+                    index
+                )
+            );
         }
     }
 
@@ -157,168 +242,227 @@ public final class HardcoreScoreboardManager {
         List<Component> lines =
             new ArrayList<>();
 
+        /*
+         * Attempt
+         */
         lines.add(
-            Component.empty()
+            Component.text()
+                .append(
+                    InstigateTheme.secondary(
+                        "Attempt  "
+                    )
+                )
+                .append(
+                    Component.text(
+                        "#"
+                            + statsManager
+                                .getCurrentAttempt(),
+                        InstigateTheme.PURPLE
+                    )
+                )
+                .build()
         );
 
+        /*
+         * Run timer
+         */
+        lines.add(
+            Component.text()
+                .append(
+                    InstigateTheme.secondary(
+                        "Run  "
+                    )
+                )
+                .append(
+                    Component.text(
+                        formatDuration(
+                            runManager
+                                .getElapsedTime()
+                        ),
+                        InstigateTheme.TEXT
+                    )
+                )
+                .build()
+        );
+
+        /*
+         * Spacer.
+         */
         lines.add(
             Component.text(
-                "Attempt ",
-                NamedTextColor.GRAY
-            ).append(
-                Component.text(
-                    "#"
-                        + statsManager
-                            .getCurrentAttempt(),
-                    NamedTextColor.RED
-                ).decorate(
-                    TextDecoration.BOLD
-                )
+                " "
             )
         );
 
+        /*
+         * Death leaderboard heading.
+         */
         lines.add(
             Component.text(
-                "Run ",
-                NamedTextColor.GRAY
-            ).append(
-                Component.text(
-                    formatDuration(
-                        runManager
-                            .getElapsedTime()
-                    ),
-                    NamedTextColor.WHITE
-                )
-            )
-        );
-
-        lines.add(
-            Component.text(" ")
-        );
-
-        lines.add(
-            Component.text(
-                "DEATHS",
-                NamedTextColor.GOLD
+                "Deaths",
+                InstigateTheme.PURPLE
             ).decorate(
                 TextDecoration.BOLD
             )
         );
 
         List<PlayerStats> players =
-            statsManager.getPlayersByDeaths();
+            statsManager
+                .getPlayersByDeaths();
 
-        int availablePlayerLines =
-            MAX_LINES - lines.size();
+        if (players.isEmpty()) {
+            lines.add(
+                InstigateTheme.muted(
+                    "No players yet"
+                )
+            );
+
+            return lines;
+        }
+
+        int visiblePlayers =
+            players.size();
+
+        boolean needsOverflowRow =
+            visiblePlayers
+                > MAX_DEATH_ROWS;
+
+        if (needsOverflowRow) {
+            /*
+             * Reserve one row for "+N more".
+             */
+            visiblePlayers =
+                MAX_DEATH_ROWS
+                    - 1;
+        }
 
         for (
-            PlayerStats player :
-            players.stream()
-                .limit(availablePlayerLines)
-                .toList()
+            int index = 0;
+            index < visiblePlayers;
+            index++
         ) {
+            PlayerStats player =
+                players.get(
+                    index
+                );
+
             lines.add(
-                createPlayerLine(player)
+                Component.text()
+                    .append(
+                        Component.text(
+                            player.name(),
+                            InstigateTheme.TEXT
+                        )
+                    )
+                    .append(
+                        InstigateTheme.muted(
+                            "  "
+                        )
+                    )
+                    .append(
+                        Component.text(
+                            Integer.toString(
+                                player.deaths()
+                            ),
+                            player.deaths() > 0
+                                ? InstigateTheme.PURPLE
+                                : InstigateTheme.MUTED
+                        )
+                    )
+                    .build()
+            );
+        }
+
+        if (needsOverflowRow) {
+            int hidden =
+                players.size()
+                    - visiblePlayers;
+
+            lines.add(
+                InstigateTheme.muted(
+                    "+"
+                        + hidden
+                        + " more"
+                )
             );
         }
 
         return lines;
     }
 
-    private Component createPlayerLine(
-        PlayerStats player
-    ) {
-        return Component.text(
-            player.name(),
-            NamedTextColor.WHITE
-        ).append(
-            Component.text(
-                "  •  ",
-                NamedTextColor.DARK_GRAY
-            )
-        ).append(
-            Component.text(
-                Integer.toString(
-                    player.deaths()
-                ),
-                player.deaths() == 0
-                    ? NamedTextColor.GRAY
-                    : NamedTextColor.RED
-            )
+    /*
+     * ------------------------------------------------------------
+     * SCOREBOARD CREATION
+     * ------------------------------------------------------------
+     */
+
+    private void ensureScoreboard() {
+        if (
+            scoreboard != null
+                && objective != null
+        ) {
+            return;
+        }
+
+        ScoreboardManager scoreboardManager =
+            Bukkit.getScoreboardManager();
+
+        if (scoreboardManager == null) {
+            throw new IllegalStateException(
+                "Bukkit scoreboard manager is unavailable."
+            );
+        }
+
+        scoreboard =
+            scoreboardManager
+                .getNewScoreboard();
+
+        objective =
+            scoreboard
+                .registerNewObjective(
+                    OBJECTIVE_NAME,
+                    Criteria.DUMMY,
+                    InstigateTheme.brand()
+                );
+
+        objective.setDisplaySlot(
+            DisplaySlot.SIDEBAR
+        );
+
+        /*
+         * The sidebar uses score values only to determine row
+         * ordering. They should not be shown to players.
+         */
+        objective.numberFormat(
+            NumberFormat.blank()
         );
     }
 
-    private void updateLines(
-        List<Component> lines
-    ) {
-        for (
-            int index = 0;
-            index < MAX_LINES;
-            index++
-        ) {
-            String entry =
-                entryFor(index);
-
-            if (index >= lines.size()) {
-                scoreboard.resetScores(
-                    entry
-                );
-
-                continue;
-            }
-
-            /*
-             * Higher score values render above lower values.
-             */
-            int scoreValue =
-                MAX_LINES - index;
-
-            Score score =
-                objective.getScore(entry);
-
-            score.setScore(
-                scoreValue
-            );
-
-            score.customName(
-                lines.get(index)
-            );
-
-            score.numberFormat(
-                NumberFormat.blank()
-            );
-        }
-    }
-
-    private String entryFor(
-        int index
-    ) {
-        /*
-         * Internal unique entry IDs.
-         *
-         * Players never see these because customName()
-         * determines the visible sidebar text.
-         */
-        return "ih_line_" + index;
-    }
+    /*
+     * ------------------------------------------------------------
+     * FORMATTING
+     * ------------------------------------------------------------
+     */
 
     private String formatDuration(
         Duration duration
     ) {
         long totalSeconds =
             Math.max(
-                0,
+                0L,
                 duration.getSeconds()
             );
 
         long hours =
-            totalSeconds / 3600;
+            totalSeconds / 3600L;
 
         long minutes =
-            (totalSeconds % 3600) / 60;
+            (
+                totalSeconds % 3600L
+            ) / 60L;
 
         long seconds =
-            totalSeconds % 60;
+            totalSeconds % 60L;
 
         return String.format(
             "%02d:%02d:%02d",
@@ -326,9 +470,5 @@ public final class HardcoreScoreboardManager {
             minutes,
             seconds
         );
-    }
-
-    public Scoreboard getScoreboard() {
-        return scoreboard;
     }
 }

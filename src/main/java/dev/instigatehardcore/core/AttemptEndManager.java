@@ -5,11 +5,10 @@ import dev.instigatehardcore.player.PlayerResetManager;
 import dev.instigatehardcore.stats.StatsManager;
 import dev.instigatehardcore.telemetry.PlayerDeathRecord;
 import dev.instigatehardcore.telemetry.PlayerTelemetryManager;
+import dev.instigatehardcore.ui.InstigateTheme;
 import dev.instigatehardcore.world.WorldRotationManager;
 
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.format.TextDecoration;
 
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -40,13 +39,19 @@ public final class AttemptEndManager {
         WorldRotationManager worldRotationManager
     ) {
         this.plugin =
-            Objects.requireNonNull(plugin);
+            Objects.requireNonNull(
+                plugin
+            );
 
         this.runManager =
-            Objects.requireNonNull(runManager);
+            Objects.requireNonNull(
+                runManager
+            );
 
         this.statsManager =
-            Objects.requireNonNull(statsManager);
+            Objects.requireNonNull(
+                statsManager
+            );
 
         this.telemetryManager =
             Objects.requireNonNull(
@@ -70,7 +75,7 @@ public final class AttemptEndManager {
     }
 
     /**
-     * Ends the active attempt because a player died.
+     * Ends the current ACTIVE attempt because a player died.
      *
      * Only the first caller that successfully transitions
      * ACTIVE -> ENDING may end the attempt.
@@ -80,9 +85,17 @@ public final class AttemptEndManager {
         String deathMessage,
         String deathCause
     ) {
-        Objects.requireNonNull(player);
-        Objects.requireNonNull(deathMessage);
-        Objects.requireNonNull(deathCause);
+        Objects.requireNonNull(
+            player
+        );
+
+        Objects.requireNonNull(
+            deathMessage
+        );
+
+        Objects.requireNonNull(
+            deathCause
+        );
 
         if (!beginEnding()) {
             return false;
@@ -119,15 +132,16 @@ public final class AttemptEndManager {
     }
 
     /**
-     * Ends the active attempt administratively.
+     * Ends the current ACTIVE attempt administratively.
      *
-     * No player receives a death and no death telemetry record
-     * is created.
+     * Administrative resets do not record a player death.
      */
     public synchronized boolean endFromAdminReset(
         CommandSender sender
     ) {
-        Objects.requireNonNull(sender);
+        Objects.requireNonNull(
+            sender
+        );
 
         if (!beginEnding()) {
             return false;
@@ -158,7 +172,8 @@ public final class AttemptEndManager {
             return false;
         }
 
-        return runManager.beginEnding();
+        return runManager
+            .beginEnding();
     }
 
     private void endPlaytime(
@@ -216,16 +231,17 @@ public final class AttemptEndManager {
         }
 
         try {
-            telemetryManager.recordDeath(
-                player.getUniqueId(),
-                player.getName(),
-                new PlayerDeathRecord(
-                    attempt,
-                    System.currentTimeMillis(),
-                    deathCause,
-                    deathMessage
-                )
-            );
+            telemetryManager
+                .recordDeath(
+                    player.getUniqueId(),
+                    player.getName(),
+                    new PlayerDeathRecord(
+                        attempt,
+                        System.currentTimeMillis(),
+                        deathCause,
+                        deathMessage
+                    )
+                );
         } catch (
             IOException exception
         ) {
@@ -244,9 +260,6 @@ public final class AttemptEndManager {
     private void beginCountdown(
         int attempt
     ) {
-        /*
-         * Everybody is removed from gameplay immediately.
-         */
         playerResetManager
             .beginCountdownPhase();
 
@@ -254,9 +267,12 @@ public final class AttemptEndManager {
             .startCountdown(
                 attempt,
                 () -> {
-                    if (!runManager.beginResetting()) {
+                    if (
+                        !runManager
+                            .beginResetting()
+                    ) {
                         plugin.getLogger().severe(
-                            "[Instigate Cafe Hardcore] "
+                            "[Instigate Cafe] "
                                 + "Unable to transition attempt #"
                                 + attempt
                                 + " from ENDING to RESETTING."
@@ -270,7 +286,7 @@ public final class AttemptEndManager {
                             .rotateToStandby()
                     ) {
                         plugin.getLogger().severe(
-                            "[Instigate Cafe Hardcore] "
+                            "[Instigate Cafe] "
                                 + "World rotation failed after attempt #"
                                 + attempt
                                 + "."
@@ -280,78 +296,93 @@ public final class AttemptEndManager {
             );
     }
 
+    /*
+     * ------------------------------------------------------------
+     * CHAT ANNOUNCEMENTS
+     * ------------------------------------------------------------
+     */
+
     private void announcePlayerDeath(
         Player player,
         int attempt,
         int totalDeaths,
         String deathMessage
     ) {
-        Component divider =
-            divider();
-
         plugin.getServer().broadcast(
-            divider
-        );
-
-        plugin.getServer().broadcast(
-            brand()
-        );
-
-        plugin.getServer().broadcast(
-            Component.text(
-                "Attempt #"
-                    + attempt
-                    + " has ended",
-                NamedTextColor.RED
+            InstigateTheme.chat(
+                Component.text()
+                    .append(
+                        InstigateTheme.attempt(
+                            attempt
+                        )
+                    )
+                    .append(
+                        InstigateTheme.secondary(
+                            " has ended."
+                        )
+                    )
+                    .build()
             )
         );
 
         plugin.getServer().broadcast(
-            Component.empty()
-        );
-
-        plugin.getServer().broadcast(
-            Component.text(
-                deathMessage,
-                NamedTextColor.WHITE
+            InstigateTheme.chat(
+                Component.text(
+                    deathMessage,
+                    InstigateTheme.TEXT
+                )
             )
         );
 
         plugin.getServer().broadcast(
-            Component.text()
-                .append(
-                    Component.text(
-                        player.getName(),
-                        NamedTextColor.RED
+            InstigateTheme.chat(
+                Component.text()
+                    .append(
+                        Component.text(
+                            player.getName(),
+                            InstigateTheme.TEXT
+                        )
                     )
-                )
-                .append(
-                    Component.text(
-                        " now has "
-                            + totalDeaths
-                            + " total death"
-                            + (
-                                totalDeaths == 1
-                                    ? ""
-                                    : "s"
-                            )
-                            + ".",
-                        NamedTextColor.GRAY
+                    .append(
+                        InstigateTheme.secondary(
+                            " now has "
+                                + totalDeaths
+                                + " total death"
+                                + (
+                                    totalDeaths == 1
+                                        ? ""
+                                        : "s"
+                                )
+                                + "."
+                        )
                     )
-                )
-                .build()
+                    .build()
+            )
         );
 
         plugin.getServer().broadcast(
-            Component.empty()
-        );
-
-        plugin.getServer().broadcast(
-            nextAttemptMessage()
-        );
-
-        plugin.getServer().broadcast(
-            divider
+            InstigateTheme.chat(
+                Component.text()
+                    .append(
+                        InstigateTheme.secondary(
+                            "Next attempt in "
+                        )
+                    )
+                    .append(
+                        Component.text(
+                            countdownManager
+                                .getDurationSeconds()
+                                + "s",
+                            InstigateTheme.PURPLE
+                        )
+                    )
+                    .append(
+                        InstigateTheme.secondary(
+                            "."
+                        )
+                    )
+                    .build()
+            )
         );
     }
 
@@ -359,96 +390,65 @@ public final class AttemptEndManager {
         CommandSender sender,
         int attempt
     ) {
-        Component divider =
-            divider();
-
         plugin.getServer().broadcast(
-            divider
-        );
-
-        plugin.getServer().broadcast(
-            brand()
-        );
-
-        plugin.getServer().broadcast(
-            Component.text(
-                "Attempt #"
-                    + attempt
-                    + " has been reset",
-                NamedTextColor.RED
+            InstigateTheme.chat(
+                Component.text()
+                    .append(
+                        InstigateTheme.attempt(
+                            attempt
+                        )
+                    )
+                    .append(
+                        InstigateTheme.secondary(
+                            " was reset by "
+                        )
+                    )
+                    .append(
+                        Component.text(
+                            sender.getName(),
+                            InstigateTheme.TEXT
+                        )
+                    )
+                    .append(
+                        InstigateTheme.secondary(
+                            "."
+                        )
+                    )
+                    .build()
             )
         );
 
         plugin.getServer().broadcast(
-            Component.empty()
-        );
-
-        plugin.getServer().broadcast(
-            Component.text()
-                .append(
-                    Component.text(
-                        "Administrative reset by ",
-                        NamedTextColor.GRAY
-                    )
+            InstigateTheme.chat(
+                InstigateTheme.muted(
+                    "No player death was recorded."
                 )
-                .append(
-                    Component.text(
-                        sender.getName(),
-                        NamedTextColor.WHITE
-                    )
-                )
-                .append(
-                    Component.text(
-                        ".",
-                        NamedTextColor.GRAY
-                    )
-                )
-                .build()
-        );
-
-        plugin.getServer().broadcast(
-            Component.text(
-                "No player death was recorded.",
-                NamedTextColor.DARK_GRAY
             )
         );
 
         plugin.getServer().broadcast(
-            Component.empty()
-        );
-
-        plugin.getServer().broadcast(
-            nextAttemptMessage()
-        );
-
-        plugin.getServer().broadcast(
-            divider
-        );
-    }
-
-    private Component nextAttemptMessage() {
-        return Component.text(
-            "Next attempt in "
-                + countdownManager
-                    .getDurationSeconds()
-                + " seconds...",
-            NamedTextColor.GRAY
-        );
-    }
-
-    private Component brand() {
-        return Component.text(
-            "INSTIGATE CAFE HARDCORE",
-            NamedTextColor.GOLD
-        ).decorate(
-            TextDecoration.BOLD
-        );
-    }
-
-    private Component divider() {
-        return Component.text(
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            NamedTextColor.DARK_GRAY
+            InstigateTheme.chat(
+                Component.text()
+                    .append(
+                        InstigateTheme.secondary(
+                            "Next attempt in "
+                        )
+                    )
+                    .append(
+                        Component.text(
+                            countdownManager
+                                .getDurationSeconds()
+                                + "s",
+                            InstigateTheme.PURPLE
+                        )
+                    )
+                    .append(
+                        InstigateTheme.secondary(
+                            "."
+                        )
+                    )
+                    .build()
+            )
         );
     }
 }
