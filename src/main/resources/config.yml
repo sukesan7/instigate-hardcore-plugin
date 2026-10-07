@@ -16,6 +16,3 @@ worlds:
   # 1 = 3x3 chunks
   # 2 = 5x5 chunks
   preload-radius-chunks: 1
-
-debug:
-  enabled: false
