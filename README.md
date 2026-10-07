@@ -2,6 +2,8 @@
 
 > Shared hardcore Minecraft for groups of friends.
 
+![Instigate Cafe Banner](docs/assets/gallery/ic_banner.png)
+
 **Instigate Cafe's Hardcore** is a Paper plugin built around one simple rule:
 
 **If one player dies, the attempt ends for everyone.**
