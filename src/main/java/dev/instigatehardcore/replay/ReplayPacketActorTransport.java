@@ -2,6 +2,8 @@ package dev.instigatehardcore.replay;
 
 import com.destroystokyo.paper.profile.ProfileProperty;
 import com.github.retrooper.packetevents.PacketEvents;
+import com.github.retrooper.packetevents.protocol.component.builtin.item.ItemSwingAnimation;
+import com.github.retrooper.packetevents.protocol.player.InteractionHand;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityDataTypes;
 import com.github.retrooper.packetevents.protocol.entity.type.EntityType;
@@ -20,6 +22,9 @@ import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEn
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityHeadLook;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityTeleport;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityAnimation;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerHurtAnimation;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerSwingAnimation;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerPlayerInfoRemove;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerPlayerInfoUpdate;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerSpawnEntity;
@@ -49,7 +54,8 @@ import java.util.UUID;
  * success, error, logout, dimension change and plugin shutdown.
  *
  * IMPORTANT: This intentionally renders only the recorded actor snapshots.
- * It does not rewind blocks, sound, particle events or combat animations.
+ * It does not rewind blocks or replay environmental damage sounds.
+ * Phase 9F.2 adds ghost-only combat animation packets.
  */
 public final class ReplayPacketActorTransport implements ReplayActorTransport {
     private record Ghost(int entityId, UUID profileId, boolean player, ReplayActorPose lastPose) { }
@@ -85,6 +91,45 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
                 case SPAWN -> spawn(change.pose());
                 case UPDATE -> update(change.pose());
                 case REMOVE -> remove(change.actorId());
+            }
+        }
+    }
+
+    /**
+     * Apply only recorded, time-aligned visual events to fake ghost IDs.
+     * Events referencing actors not currently visible are ignored.
+     */
+    @Override
+    public void playVisualEvents(List<ReplayVisualEvent> events) {
+        assertMainThread();
+        if (closed || !viewer.isOnline()
+            || !viewer.getWorld().getUID().equals(replayWorldId)) {
+            return;
+        }
+        for (ReplayVisualEvent event : Objects.requireNonNull(events)) {
+            if (!event.worldId().equals(replayWorldId)) {
+                continue;
+            }
+            Ghost ghost = ghosts.get(event.actorId());
+            if (ghost == null) {
+                continue; // The actor is absent from the recorded frame.
+            }
+            switch (event.kind()) {
+                case SWING_MAIN -> send(new WrapperPlayServerSwingAnimation(
+                    ghost.entityId(), InteractionHand.MAIN_HAND,
+                    new ItemSwingAnimation(ItemSwingAnimation.Type.WHACK, 6)
+                ));
+                case SWING_OFF -> send(new WrapperPlayServerSwingAnimation(
+                    ghost.entityId(), InteractionHand.OFF_HAND,
+                    new ItemSwingAnimation(ItemSwingAnimation.Type.WHACK, 6)
+                ));
+                case HURT -> send(new WrapperPlayServerHurtAnimation(
+                    ghost.entityId(), ghost.lastPose().yaw()
+                ));
+                case CRITICAL -> send(new WrapperPlayServerEntityAnimation(
+                    ghost.entityId(),
+                    WrapperPlayServerEntityAnimation.EntityAnimationType.CRITICAL_HIT
+                ));
             }
         }
     }
@@ -197,9 +242,24 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
         int flags = (pose.burning() ? 0x01 : 0)
             | (pose.sneaking() ? 0x02 : 0)
             | (pose.gliding() ? 0x80 : 0);
-        send(new WrapperPlayServerEntityMetadata(
-            id, List.of(new EntityData<>(0, EntityDataTypes.BYTE, (byte) flags))
-        ));
+
+        List<EntityData<?>> metadata = new ArrayList<>(2);
+        metadata.add(new EntityData<>(0, EntityDataTypes.BYTE, (byte) flags));
+
+        // Minecraft 26.3: Avatar skin customisation is metadata index 16.
+        // The default for a newly spawned fake PLAYER is 0 (inner skin only).
+        // 0x7F enables cape, jacket, both sleeves, both trouser overlays and hat.
+        // This is only valid for PLAYER actors: never put Avatar metadata on mobs.
+        if (ReplayPlayerSkinLayers.isPlayer(pose.entityType())) {
+            metadata.add(new EntityData<>(
+                ReplayPlayerSkinLayers.METADATA_INDEX,
+                EntityDataTypes.BYTE,
+                ReplayPlayerSkinLayers.ALL_VISIBLE
+            ));
+        }
+
+        // Called at spawn and on state changes, so overlay flags stay consistent.
+        send(new WrapperPlayServerEntityMetadata(id, metadata));
     }
 
     private void sendEquipment(int id, ReplayEquipment equipment) {

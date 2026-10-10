@@ -71,6 +71,19 @@ public final class ReplayActorScene {
      * Appearance/equipment are preserved from the last observed keyframe;
      * location/rotation are linearly interpolated between recorded keyframes.
      */
+    /**
+     * Maps a sampled event tick onto the 7-second playback clock.
+     * -1 means the event predates the displayed scene; late terminal events
+     * are clamped to the final replay tick.
+     */
+    public int playbackTickOf(long recordedTick) {
+        if (recordedTick < playbackStartTick) {
+            return -1;
+        }
+        return (int) Math.min(durationTicks,
+            initialHoldTicks + recordedTick - playbackStartTick);
+    }
+
     public Map<UUID, ReplayActorPose> at(int elapsedTicks) {
         if (elapsedTicks < 0 || elapsedTicks > durationTicks) {
             throw new IllegalArgumentException("Playback tick is outside scene duration.");

@@ -12,6 +12,10 @@ import java.util.List;
 public interface ReplayActorTransport extends AutoCloseable {
     void apply(List<ReplayActorChange> changes);
 
+    /** Optional client-side animations, emitted after actor spawn/update. */
+    default void playVisualEvents(List<ReplayVisualEvent> events) { }
+
+
     @Override
     void close();
 }

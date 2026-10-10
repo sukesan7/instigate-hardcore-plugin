@@ -34,6 +34,7 @@ import java.util.logging.Level;
 public final class ReplayDebugPreviewCommand implements CommandExecutor, Listener, AutoCloseable {
     private final JavaPlugin plugin;
     private final DeathReplayRecorder recorder;
+    private final ReplayCombatRecorder combatRecorder;
     private final Map<UUID, Preview> active = new HashMap<>();
 
     private final class Preview implements AutoCloseable {
@@ -51,7 +52,10 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
         boolean focused;
         boolean closed;
 
-        Preview(Player viewer, ReplayActorScene scene, ReplayClip clip, boolean pov) {
+        Preview(
+            Player viewer, ReplayActorScene scene, ReplayClip clip,
+            boolean pov, List<ReplayVisualEvent> events
+        ) {
             this.viewer = viewer;
             this.worldId = scene.worldId();
             this.scene = scene;
@@ -59,7 +63,7 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             this.pov = pov;
             this.victimId = scene.death().victimId();
             this.transport = new ReplayPacketActorTransport(viewer, scene.worldId());
-            this.playback = new ReplayActorPlayback(scene, transport);
+            this.playback = new ReplayActorPlayback(scene, transport, events);
         }
 
         void start() {
@@ -129,9 +133,12 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
         }
     }
 
-    public ReplayDebugPreviewCommand(JavaPlugin plugin, DeathReplayRecorder recorder) {
+    public ReplayDebugPreviewCommand(
+        JavaPlugin plugin, DeathReplayRecorder recorder, ReplayCombatRecorder combatRecorder
+    ) {
         this.plugin = Objects.requireNonNull(plugin);
         this.recorder = Objects.requireNonNull(recorder);
+        this.combatRecorder = Objects.requireNonNull(combatRecorder);
     }
 
     @Override
@@ -191,13 +198,17 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             lastVictim.x(), lastVictim.y(), lastVictim.z(),
             lastVictim.yaw(), lastVictim.pitch(), "Debug replay (no actual death)", "PREVIEW"
         );
+        List<ReplayVisualEvent> visualEvents = combatRecorder.snapshotVisualFor(
+            subject.getUniqueId(), clip.attempt(), clip.worldId(),
+            clip.frames().getFirst().tick(), terminal.tick()
+        );
         ReplayActorScene scene = new ReplayActorScene(
-            new FrozenDeathReplay(clip, terminal, List.of())
+            new FrozenDeathReplay(clip, terminal, List.of(), visualEvents)
         );
         boolean pov = args.length == 2 && args[1].equalsIgnoreCase("pov");
         finish(viewer.getUniqueId());
         try {
-            Preview preview = new Preview(viewer, scene, clip, pov);
+            Preview preview = new Preview(viewer, scene, clip, pov, visualEvents);
             active.put(viewer.getUniqueId(), preview);
             preview.start();
             viewer.sendMessage("Replaying recorded actors for 7 seconds (test only; no death/reset)."

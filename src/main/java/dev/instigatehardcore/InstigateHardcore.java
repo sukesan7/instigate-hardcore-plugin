@@ -932,7 +932,8 @@ public final class InstigateHardcore extends JavaPlugin {
 
         replayDebugPreviewCommand = new ReplayDebugPreviewCommand(
             this,
-            deathReplayRecorder
+            deathReplayRecorder,
+            replayCombatRecorder
         );
 
         command.setExecutor(replayDebugPreviewCommand);

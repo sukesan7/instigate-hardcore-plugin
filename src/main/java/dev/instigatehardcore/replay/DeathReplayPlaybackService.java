@@ -104,7 +104,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
             return false;
         }
 
-        Session session = new Session(scene, frozen.clip(), deathLocation.clone(), onFinish);
+        Session session = new Session(scene, frozen.clip(), frozen.visualEvents(), deathLocation.clone(), onFinish);
         active = session;
         try {
             stopDeveloperPreviews.run();
@@ -127,6 +127,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
     private final class Session {
         final ReplayActorScene scene;
         final ReplayClip clip;
+        final List<ReplayVisualEvent> visualEvents;
         final Location deathLocation;
         final BiConsumer<Boolean, Integer> callback;
         final Map<UUID, Viewer> viewers = new HashMap<>();
@@ -138,11 +139,13 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
         Session(
             ReplayActorScene scene,
             ReplayClip clip,
+            List<ReplayVisualEvent> visualEvents,
             Location deathLocation,
             BiConsumer<Boolean, Integer> callback
         ) {
             this.scene = scene;
             this.clip = clip;
+            this.visualEvents = List.copyOf(visualEvents);
             this.deathLocation = deathLocation;
             this.callback = callback;
         }
@@ -348,7 +351,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                         }
                     }
                     newTransport = new ReplayPacketActorTransport(player, scene.worldId());
-                    this.playback = new ReplayActorPlayback(scene, newTransport);
+                    this.playback = new ReplayActorPlayback(scene, newTransport, visualEvents);
                     this.transport = newTransport;
                 } catch (RuntimeException exception) {
                     if (newTransport != null) {

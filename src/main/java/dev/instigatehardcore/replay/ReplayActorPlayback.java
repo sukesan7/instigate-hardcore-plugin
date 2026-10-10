@@ -10,11 +10,21 @@ import java.util.Objects;
 public final class ReplayActorPlayback implements AutoCloseable {
     private final ReplayActorSession session;
     private final ReplayActorTransport transport;
+    private final ReplayVisualEventTimeline visualTimeline;
     private boolean closed;
 
     public ReplayActorPlayback(ReplayActorScene scene, ReplayActorTransport transport) {
+        this(scene, transport, java.util.List.of());
+    }
+
+    public ReplayActorPlayback(
+        ReplayActorScene scene,
+        ReplayActorTransport transport,
+        java.util.List<ReplayVisualEvent> visualEvents
+    ) {
         this.session = new ReplayActorSession(Objects.requireNonNull(scene));
         this.transport = Objects.requireNonNull(transport);
+        this.visualTimeline = new ReplayVisualEventTimeline(scene, visualEvents);
     }
 
     public void renderTick(int playbackTick) {
@@ -22,6 +32,7 @@ public final class ReplayActorPlayback implements AutoCloseable {
             throw new IllegalStateException("Playback closed.");
         }
         transport.apply(session.advanceTo(playbackTick));
+        transport.playVisualEvents(visualTimeline.at(playbackTick));
     }
 
     @Override

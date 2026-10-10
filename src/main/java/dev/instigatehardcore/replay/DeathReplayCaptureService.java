@@ -2,8 +2,11 @@ package dev.instigatehardcore.replay;
 
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -60,12 +63,42 @@ public final class DeathReplayCaptureService {
             victim.getUniqueId(), clip.attempt(), clip.worldId(),
             startTick, death.tick()
         );
-        lastFrozen = new FrozenDeathReplay(clip, death, events);
+        List<ReplayVisualEvent> visualEvents = new ArrayList<>(
+            combatRecorder.snapshotVisualFor(
+                victim.getUniqueId(), clip.attempt(), clip.worldId(),
+                startTick, death.tick()
+            )
+        );
+        // PlayerDeathEvent can fire before a MONITOR damage listener receives
+        // the fatal hit. Capture the terminal hurt effect explicitly.
+        if (visualEvents.stream().noneMatch(event ->
+                event.tick() == death.tick()
+                && event.actorId().equals(victim.getUniqueId())
+                && event.kind() == ReplayVisualEvent.Kind.HURT)) {
+            visualEvents.add(new ReplayVisualEvent(
+                death.tick(), clip.attempt(), clip.worldId(),
+                victim.getUniqueId(), ReplayVisualEvent.Kind.HURT
+            ));
+        }
+        EntityDamageEvent lastDamage = victim.getLastDamageCause();
+        if (lastDamage instanceof EntityDamageByEntityEvent attack
+            && attack.isCritical()
+            && visualEvents.stream().noneMatch(event ->
+                event.tick() == death.tick()
+                && event.actorId().equals(victim.getUniqueId())
+                && event.kind() == ReplayVisualEvent.Kind.CRITICAL)) {
+            visualEvents.add(new ReplayVisualEvent(
+                death.tick(), clip.attempt(), clip.worldId(),
+                victim.getUniqueId(), ReplayVisualEvent.Kind.CRITICAL
+            ));
+        }
+        lastFrozen = new FrozenDeathReplay(clip, death, events, visualEvents);
         plugin.getLogger().info(
             "Frozen Phase 9B death replay: attempt #" + clip.attempt()
                 + ", victim=" + victim.getName()
                 + ", frames=" + clip.frames().size()
                 + ", combatEvents=" + events.size()
+                + ", visualEvents=" + visualEvents.size()
                 + " (ready for optional playback)."
         );
         return Optional.of(lastFrozen);

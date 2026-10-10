@@ -10,12 +10,21 @@ import java.util.Objects;
 public record FrozenDeathReplay(
     ReplayClip clip,
     ReplayDeathMoment death,
-    List<ReplayCombatEvent> combatEvents
+    List<ReplayCombatEvent> combatEvents,
+    List<ReplayVisualEvent> visualEvents
 ) {
+    /** Keep existing 9B/9C tests and callers source-compatible. */
+    public FrozenDeathReplay(
+        ReplayClip clip, ReplayDeathMoment death, List<ReplayCombatEvent> combatEvents
+    ) {
+        this(clip, death, combatEvents, List.of());
+    }
+
     public FrozenDeathReplay {
         Objects.requireNonNull(clip);
         Objects.requireNonNull(death);
         combatEvents = List.copyOf(Objects.requireNonNull(combatEvents));
+        visualEvents = List.copyOf(Objects.requireNonNull(visualEvents));
 
         if (clip.attempt() != death.attempt()
             || !clip.victimId().equals(death.victimId())
@@ -30,6 +39,13 @@ public record FrozenDeathReplay(
                 || !event.worldId().equals(clip.worldId())
                 || event.tick() < startTick || event.tick() > death.tick()) {
                 throw new IllegalArgumentException("Combat event lies outside clip timeline.");
+            }
+        }
+        for (ReplayVisualEvent event : visualEvents) {
+            if (event.attempt() != clip.attempt()
+                || !event.worldId().equals(clip.worldId())
+                || event.tick() < startTick || event.tick() > death.tick()) {
+                throw new IllegalArgumentException("Visual event lies outside clip timeline.");
             }
         }
     }
