@@ -52,14 +52,28 @@ public final class CountdownManager {
         int attemptNumber,
         Runnable onComplete
     ) {
-        Objects.requireNonNull(
-            onComplete
-        );
+        startCountdown(attemptNumber, durationSeconds, onComplete);
+    }
+
+    /**
+     * Phase 9E: allow the ordinary countdown to run for the last
+     * three seconds after a seven-second death replay.
+     * The original two-argument overload still uses the configured
+     * duration, including for administrative resets.
+     */
+    public synchronized void startCountdown(
+        int attemptNumber,
+        int seconds,
+        Runnable onComplete
+    ) {
+        Objects.requireNonNull(onComplete);
+        if (seconds < 1 || seconds > 600) {
+            throw new IllegalArgumentException("Countdown must be 1..600 seconds.");
+        }
 
         cancel();
 
-        remainingSeconds =
-            durationSeconds;
+        remainingSeconds = seconds;
 
         /*
          * Update immediately, then once every second.

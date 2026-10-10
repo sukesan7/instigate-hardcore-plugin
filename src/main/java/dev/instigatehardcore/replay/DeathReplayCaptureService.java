@@ -66,7 +66,7 @@ public final class DeathReplayCaptureService {
                 + ", victim=" + victim.getName()
                 + ", frames=" + clip.frames().size()
                 + ", combatEvents=" + events.size()
-                + " (playback not enabled)."
+                + " (ready for optional playback)."
         );
         return Optional.of(lastFrozen);
     }

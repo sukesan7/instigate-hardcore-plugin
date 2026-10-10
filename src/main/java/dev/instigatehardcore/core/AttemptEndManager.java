@@ -5,6 +5,9 @@ import dev.instigatehardcore.countdown.CountdownManager;
 import dev.instigatehardcore.player.PlayerResetManager;
 
 import dev.instigatehardcore.replay.DeathReplayCaptureService;
+import dev.instigatehardcore.replay.DeathReplayPlaybackService;
+import dev.instigatehardcore.replay.FrozenDeathReplay;
+import dev.instigatehardcore.replay.ReplayTiming;
 
 import dev.instigatehardcore.stats.StatsManager;
 
@@ -28,6 +31,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.io.IOException;
 
 import java.util.Objects;
+import java.util.Optional;
 
 public final class AttemptEndManager {
 
@@ -47,6 +51,8 @@ public final class AttemptEndManager {
 
     /* Optional Phase 9B recorder; normal hardcore works without it. */
     private DeathReplayCaptureService replayCaptureService;
+    private DeathReplayPlaybackService replayPlaybackService;
+    private ReplayTiming replayTiming;
 
     public AttemptEndManager(
         JavaPlugin plugin,
@@ -101,6 +107,15 @@ public final class AttemptEndManager {
         DeathReplayCaptureService service
     ) {
         this.replayCaptureService = Objects.requireNonNull(service);
+    }
+
+    /** Called only when Phase 9E is enabled and PacketEvents is loaded. */
+    public void setDeathReplayPlaybackService(
+        DeathReplayPlaybackService service,
+        ReplayTiming timing
+    ) {
+        this.replayPlaybackService = Objects.requireNonNull(service);
+        this.replayTiming = Objects.requireNonNull(timing);
     }
 
     /*
@@ -161,9 +176,10 @@ public final class AttemptEndManager {
          * Replay is observation-only in Phase 9B/9D. A capture
          * failure must never prevent the established death reset.
          */
+        Optional<FrozenDeathReplay> frozenReplay = Optional.empty();
         if (replayCaptureService != null) {
             try {
-                replayCaptureService.freezeOnDeath(
+                frozenReplay = replayCaptureService.freezeOnDeath(
                     player,
                     deathMessage,
                     deathCause
@@ -196,9 +212,10 @@ public final class AttemptEndManager {
             deathMessage
         );
 
-        beginDeathCountdown(
+        beginDeathSequence(
             attempt,
-            deathLocation
+            deathLocation,
+            frozenReplay
         );
 
         return true;
@@ -379,18 +396,62 @@ public final class AttemptEndManager {
      * everyone becomes spectator and is gathered at the exact
      * death location before the reset countdown begins.
      */
-    private void beginDeathCountdown(
+    private void beginDeathSequence(
         int attempt,
-        Location deathLocation
+        Location deathLocation,
+        Optional<FrozenDeathReplay> frozenReplay
     ) {
-        playerResetManager
-            .beginCountdownPhase(
-                deathLocation
-            );
+        /*
+         * Keep the established safe spectator transition first.
+         * Packet-only ghosts are shown afterward in the exact
+         * original dimension. The world will not rotate until
+         * replay playback AND the final buffer have completed.
+         */
+        playerResetManager.beginCountdownPhase(deathLocation);
 
-        startCountdown(
-            attempt
-        );
+        if (replayPlaybackService != null
+            && replayTiming != null
+            && frozenReplay.isPresent()) {
+            try {
+                FrozenDeathReplay replay = frozenReplay.get();
+                if (replay.clip().attempt() == attempt
+                    && replayPlaybackService.play(
+                        replay,
+                        deathLocation,
+                        replayTiming.replayTicks(),
+                        (completed, playbackTicksElapsed) -> {
+                            if (!runManager.isEnding()
+                                || statsManager.getCurrentAttempt() != attempt) {
+                                return;
+                            }
+                            int remaining = completed
+                                ? replayTiming.bufferSeconds()
+                                : replayTiming.remainingOnFailure(playbackTicksElapsed);
+                            startCountdown(attempt, remaining);
+                        }
+                    )) {
+                    plugin.getServer().broadcast(
+                        InstigateTheme.chat(
+                            InstigateTheme.secondary(
+                                "Showing the final "
+                                    + replayTiming.replaySeconds()
+                                    + " seconds. Reset countdown follows."
+                            )
+                        )
+                    );
+                    return;
+                }
+            } catch (RuntimeException exception) {
+                plugin.getLogger().log(
+                    java.util.logging.Level.WARNING,
+                    "Shared death replay could not start; using normal countdown.",
+                    exception
+                );
+            }
+        }
+
+        // Disabled, missing clip, missing PacketEvents, or startup failure.
+        startCountdown(attempt);
     }
 
     /**
@@ -410,12 +471,18 @@ public final class AttemptEndManager {
         );
     }
 
+    private void startCountdown(int attempt) {
+        startCountdown(attempt, countdownManager.getDurationSeconds());
+    }
+
     private void startCountdown(
-        int attempt
+        int attempt,
+        int seconds
     ) {
         countdownManager
             .startCountdown(
                 attempt,
+                seconds,
                 () -> {
                     if (
                         !runManager

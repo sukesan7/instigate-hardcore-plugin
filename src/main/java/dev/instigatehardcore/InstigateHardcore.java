@@ -21,6 +21,8 @@ import dev.instigatehardcore.replay.DeathReplayCaptureService;
 import dev.instigatehardcore.replay.DeathReplayRecorder;
 import dev.instigatehardcore.replay.ReplayCombatRecorder;
 import dev.instigatehardcore.replay.ReplayDebugPreviewCommand;
+import dev.instigatehardcore.replay.DeathReplayPlaybackService;
+import dev.instigatehardcore.replay.ReplayTiming;
 
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 
@@ -82,6 +84,7 @@ public final class InstigateHardcore extends JavaPlugin {
     private ReplayCombatRecorder replayCombatRecorder;
     private DeathReplayCaptureService deathReplayCaptureService;
     private ReplayDebugPreviewCommand replayDebugPreviewCommand;
+    private DeathReplayPlaybackService deathReplayPlaybackService;
 
     private BukkitTask telemetryCheckpointTask;
 
@@ -163,6 +166,7 @@ public final class InstigateHardcore extends JavaPlugin {
 
         // Developer-only visual preview, available when PacketEvents loads.
         initializeReplayPreviewCommand();
+        initializeDeathReplayPlayback();
 
         initializeTelemetryCheckpoint();
 
@@ -177,7 +181,13 @@ public final class InstigateHardcore extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        // Dispose packet-only ghost entities before stopping the recorder.
+        // Cancel automatic packet-only ghosts before their dependencies.
+        if (deathReplayPlaybackService != null) {
+            deathReplayPlaybackService.close();
+            deathReplayPlaybackService = null;
+        }
+
+        // Dispose developer-preview ghost entities before stopping recorder.
         if (replayDebugPreviewCommand != null) {
             replayDebugPreviewCommand.close();
             replayDebugPreviewCommand = null;
@@ -848,6 +858,53 @@ public final class InstigateHardcore extends JavaPlugin {
      * PHASE 9D: OPTIONAL REPLAY PREVIEW COMMAND
      * ------------------------------------------------------------
      */
+
+    /**
+     * Phase 9E is opt-in for development. Without PacketEvents or
+     * when timing does not leave a buffer, normal death handling wins.
+     */
+    private void initializeDeathReplayPlayback() {
+        if (!getConfig().getBoolean("death-replay.automatic-playback-enabled", false)) {
+            getLogger().info("Automatic death replay disabled; ordinary reset preserved.");
+            return;
+        }
+        if (deathReplayCaptureService == null) {
+            getLogger().warning("Automatic replay unavailable: death recording is disabled.");
+            return;
+        }
+        if (!getServer().getPluginManager().isPluginEnabled("packetevents")) {
+            getLogger().warning("Automatic replay unavailable: PacketEvents is not enabled.");
+            return;
+        }
+
+        ReplayTiming timing;
+        try {
+            timing = new ReplayTiming(
+                countdownManager.getDurationSeconds(),
+                getConfig().getInt("death-replay.duration-seconds", 7)
+            );
+        } catch (IllegalArgumentException exception) {
+            getLogger().warning("Automatic replay needs a reset countdown longer "
+                + "than the configured replay duration. Keeping normal reset.");
+            return;
+        }
+
+        deathReplayPlaybackService = new DeathReplayPlaybackService(
+            this,
+            () -> {
+                if (replayDebugPreviewCommand != null) {
+                    replayDebugPreviewCommand.close();
+                }
+            }
+        );
+        attemptEndManager.setDeathReplayPlaybackService(
+            deathReplayPlaybackService,
+            timing
+        );
+        getLogger().info("Phase 9E automatic death replay enabled: "
+            + timing.replaySeconds() + "s replay + "
+            + timing.bufferSeconds() + "s reset buffer.");
+    }
 
     private void initializeReplayPreviewCommand() {
         if (deathReplayRecorder == null) {
