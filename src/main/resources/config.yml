@@ -20,6 +20,7 @@ scoreboard:
 
 death-replay:
   enabled: true
+  debug-preview-enabled: true
   duration-seconds: 7
   capture-interval-ticks: 2
   capture-radius-blocks: 24

@@ -17,6 +17,11 @@ import dev.instigatehardcore.participation.AttemptParticipantManager;
 
 import dev.instigatehardcore.player.PlayerResetManager;
 
+import dev.instigatehardcore.replay.DeathReplayCaptureService;
+import dev.instigatehardcore.replay.DeathReplayRecorder;
+import dev.instigatehardcore.replay.ReplayCombatRecorder;
+import dev.instigatehardcore.replay.ReplayDebugPreviewCommand;
+
 import dev.instigatehardcore.scoreboard.HardcoreScoreboardManager;
 
 import dev.instigatehardcore.stats.StatsManager;
@@ -71,6 +76,12 @@ public final class InstigateHardcore extends JavaPlugin {
     private WorldRotationManager worldRotationManager;
 
     private AttemptEndManager attemptEndManager;
+
+    // Phase 9A–9D: recording and optional in-game developer preview.
+    private DeathReplayRecorder deathReplayRecorder;
+    private ReplayCombatRecorder replayCombatRecorder;
+    private DeathReplayCaptureService deathReplayCaptureService;
+    private ReplayDebugPreviewCommand replayDebugPreviewCommand;
 
     private BukkitTask telemetryCheckpointTask;
 
@@ -139,11 +150,19 @@ public final class InstigateHardcore extends JavaPlugin {
          */
         initializeAttemptEnding();
 
+        // Record active gameplay and freeze the confirmed death clip.
+        // Neither service alters the existing countdown or world rotation.
+        initializeDeathReplayRecorder();
+        initializeDeathReplayCapture();
+
         registerListeners();
 
         if (!initializeCommands()) {
             return;
         }
+
+        // Developer-only visual preview, available when PacketEvents loads.
+        initializeReplayPreviewCommand();
 
         initializeTelemetryCheckpoint();
 
@@ -158,6 +177,22 @@ public final class InstigateHardcore extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        // Dispose packet-only ghost entities before stopping the recorder.
+        if (replayDebugPreviewCommand != null) {
+            replayDebugPreviewCommand.close();
+            replayDebugPreviewCommand = null;
+        }
+
+        if (deathReplayCaptureService != null) {
+            deathReplayCaptureService.clear();
+            deathReplayCaptureService = null;
+        }
+
+        if (deathReplayRecorder != null) {
+            deathReplayRecorder.stop();
+            deathReplayRecorder = null;
+        }
+
         if (telemetryCheckpointTask != null) {
             telemetryCheckpointTask.cancel();
 
@@ -621,6 +656,67 @@ public final class InstigateHardcore extends JavaPlugin {
 
     /*
      * ------------------------------------------------------------
+     * PHASE 9: DEATH REPLAY RECORDING AND CAPTURE
+     * ------------------------------------------------------------
+     */
+
+    private void initializeDeathReplayRecorder() {
+        if (!getConfig().getBoolean("death-replay.enabled", true)) {
+            getLogger().info("Death replay recording disabled by configuration.");
+            return;
+        }
+
+        deathReplayRecorder = new DeathReplayRecorder(
+            this,
+            runManager,
+            statsManager,
+            worldSetManager,
+            getConfig().getInt("death-replay.duration-seconds", 7),
+            getConfig().getInt("death-replay.capture-interval-ticks", 2),
+            getConfig().getInt("death-replay.capture-radius-blocks", 24),
+            getConfig().getInt("death-replay.max-actors-per-frame", 48)
+        );
+
+        deathReplayRecorder.start();
+        getLogger().info("Phase 9A rolling death replay recorder started.");
+    }
+
+    private void initializeDeathReplayCapture() {
+        // Keep the core hardcore lifecycle functional when recording is off.
+        if (deathReplayRecorder == null) {
+            return;
+        }
+
+        replayCombatRecorder = new ReplayCombatRecorder(
+            this,
+            runManager,
+            statsManager,
+            worldSetManager,
+            deathReplayRecorder,
+            getConfig().getInt("death-replay.capture-radius-blocks", 24)
+        );
+
+        getServer().getPluginManager().registerEvents(
+            replayCombatRecorder,
+            this
+        );
+
+        deathReplayCaptureService = new DeathReplayCaptureService(
+            this,
+            deathReplayRecorder,
+            replayCombatRecorder
+        );
+
+        // Requires the Phase 9B setter in AttemptEndManager.java.
+        attemptEndManager.setDeathReplayCaptureService(
+            deathReplayCaptureService
+        );
+
+        getLogger().info("Phase 9B death replay capture enabled.");
+    }
+
+    /*
+     * ------------------------------------------------------------
      * LISTENERS
      * ------------------------------------------------------------
      */
@@ -745,6 +841,50 @@ public final class InstigateHardcore extends JavaPlugin {
         );
 
         return true;
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * PHASE 9D: OPTIONAL REPLAY PREVIEW COMMAND
+     * ------------------------------------------------------------
+     */
+
+    private void initializeReplayPreviewCommand() {
+        if (deathReplayRecorder == null) {
+            getLogger().info(
+                "Replay preview unavailable: recording is disabled."
+            );
+            return;
+        }
+
+        // Never load the packet renderer when its plugin is absent.
+        if (!getServer().getPluginManager().isPluginEnabled("packetevents")) {
+            getLogger().warning(
+                "Replay preview unavailable: PacketEvents is not enabled."
+            );
+            return;
+        }
+
+        PluginCommand command = getCommand("hcreplaytest");
+        if (command == null) {
+            getLogger().warning(
+                "Missing hcreplaytest command declaration in plugin.yml."
+            );
+            return;
+        }
+
+        replayDebugPreviewCommand = new ReplayDebugPreviewCommand(
+            this,
+            deathReplayRecorder
+        );
+
+        command.setExecutor(replayDebugPreviewCommand);
+        getServer().getPluginManager().registerEvents(
+            replayDebugPreviewCommand,
+            this
+        );
+
+        getLogger().info("Phase 9D replay preview command registered.");
     }
 
     /*

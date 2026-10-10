@@ -4,6 +4,8 @@ import dev.instigatehardcore.countdown.CountdownManager;
 
 import dev.instigatehardcore.player.PlayerResetManager;
 
+import dev.instigatehardcore.replay.DeathReplayCaptureService;
+
 import dev.instigatehardcore.stats.StatsManager;
 
 import dev.instigatehardcore.telemetry.PlayerDeathRecord;
@@ -42,6 +44,9 @@ public final class AttemptEndManager {
     private final PlayerResetManager playerResetManager;
 
     private final WorldRotationManager worldRotationManager;
+
+    /* Optional Phase 9B recorder; normal hardcore works without it. */
+    private DeathReplayCaptureService replayCaptureService;
 
     public AttemptEndManager(
         JavaPlugin plugin,
@@ -86,6 +91,16 @@ public final class AttemptEndManager {
             Objects.requireNonNull(
                 worldRotationManager
             );
+    }
+
+    /**
+     * Connects the optional Phase 9B capture service after startup.
+     * Phase 9D preview rendering remains independent of this flow.
+     */
+    public void setDeathReplayCaptureService(
+        DeathReplayCaptureService service
+    ) {
+        this.replayCaptureService = Objects.requireNonNull(service);
     }
 
     /*
@@ -138,6 +153,30 @@ public final class AttemptEndManager {
             statsManager
                 .getCurrentAttempt();
 
+        /*
+         * Freeze only the first confirmed death. This MUST happen
+         * before player resets, death telemetry or spectator
+         * teleports modify the victim and surrounding entities.
+         *
+         * Replay is observation-only in Phase 9B/9D. A capture
+         * failure must never prevent the established death reset.
+         */
+        if (replayCaptureService != null) {
+            try {
+                replayCaptureService.freezeOnDeath(
+                    player,
+                    deathMessage,
+                    deathCause
+                );
+            } catch (RuntimeException exception) {
+                plugin.getLogger().log(
+                    java.util.logging.Level.WARNING,
+                    "Unable to freeze death replay; continuing normal reset.",
+                    exception
+                );
+            }
+        }
+
         endPlaytime(
             attempt
         );
@@ -186,6 +225,22 @@ public final class AttemptEndManager {
 
         if (!beginEnding()) {
             return false;
+        }
+
+        /*
+         * Administrative resets never create a replay clip.
+         * Even a replay-cleanup failure must not interrupt rotation.
+         */
+        if (replayCaptureService != null) {
+            try {
+                replayCaptureService.clear();
+            } catch (RuntimeException exception) {
+                plugin.getLogger().log(
+                    java.util.logging.Level.WARNING,
+                    "Unable to clear replay capture during admin reset; continuing.",
+                    exception
+                );
+            }
         }
 
         int attempt =

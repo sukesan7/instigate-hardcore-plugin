@@ -18,6 +18,11 @@ commands:
       - hc
     permission: instigatehardcore.command
 
+  hcreplaytest:
+    description: Preview a seven-second death replay.
+    usage: /hcreplaytest <player> [pov]
+    permission: instigatehardcore.debug
+
 permissions:
   instigatehardcore.command:
     description: Access Instigate Cafe Hardcore commands.
@@ -30,3 +35,6 @@ permissions:
   instigatehardcore.debug:
     description: Access Instigate Cafe Hardcore diagnostics.
     default: op
+
+softdepend:
+  - packetevents
