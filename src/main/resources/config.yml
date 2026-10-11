@@ -25,6 +25,9 @@ death-replay:
   capture-interval-ticks: 2
   capture-radius-blocks: 24
   max-actors-per-frame: 48
+  visuals:
+    movement-particles: true
+    max-particles-per-tick: 24
 
 worlds:
   # Permanent safety/fallback world.

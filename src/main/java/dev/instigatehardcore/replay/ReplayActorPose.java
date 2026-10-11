@@ -17,13 +17,29 @@ public record ReplayActorPose(
     boolean gliding,
     boolean burning,
     double health,
-    ReplayEquipment equipment
+    ReplayEquipment equipment,
+    boolean sprinting,
+    boolean onGround,
+    String groundMaterial
 ) {
+    /** Source-compatible constructor for pre-9F.3 actor poses. */
+    public ReplayActorPose(
+        UUID id, String entityType, String name,
+        double x, double y, double z, float yaw, float pitch,
+        boolean sneaking, boolean gliding, boolean burning,
+        double health, ReplayEquipment equipment
+    ) {
+        this(id, entityType, name, x, y, z, yaw, pitch,
+            sneaking, gliding, burning, health, equipment,
+            false, false, "AIR");
+    }
+
     public ReplayActorPose {
         Objects.requireNonNull(id);
         Objects.requireNonNull(entityType);
         Objects.requireNonNull(name);
         Objects.requireNonNull(equipment);
+        Objects.requireNonNull(groundMaterial);
         if (entityType.isBlank()) {
             throw new IllegalArgumentException("Entity type must not be blank.");
         }
@@ -39,7 +55,8 @@ public record ReplayActorPose(
             snapshot.entityId(), snapshot.entityType(), snapshot.name(),
             snapshot.x(), snapshot.y(), snapshot.z(), snapshot.yaw(),
             snapshot.pitch(), snapshot.sneaking(), snapshot.gliding(),
-            snapshot.burning(), snapshot.health(), snapshot.equipment()
+            snapshot.burning(), snapshot.health(), snapshot.equipment(),
+            snapshot.sprinting(), snapshot.onGround(), snapshot.groundMaterial()
         );
     }
 
@@ -70,7 +87,8 @@ public record ReplayActorPose(
             mixAngle(previous.pitch(), next.pitch(), fraction),
             previous.sneaking(), previous.gliding(), previous.burning(),
             mix(previous.health(), next.health(), fraction),
-            previous.equipment()
+            previous.equipment(),
+            previous.sprinting(), previous.onGround(), previous.groundMaterial()
         );
     }
 

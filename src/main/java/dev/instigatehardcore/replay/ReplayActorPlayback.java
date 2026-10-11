@@ -8,9 +8,11 @@ import java.util.Objects;
  * On errors the caller can close() to release all already-visible ghosts.
  */
 public final class ReplayActorPlayback implements AutoCloseable {
+    private final ReplayActorScene scene;
     private final ReplayActorSession session;
     private final ReplayActorTransport transport;
     private final ReplayVisualEventTimeline visualTimeline;
+    private final ReplayMovementEffectPlanner movementPlanner;
     private boolean closed;
 
     public ReplayActorPlayback(ReplayActorScene scene, ReplayActorTransport transport) {
@@ -22,9 +24,23 @@ public final class ReplayActorPlayback implements AutoCloseable {
         ReplayActorTransport transport,
         java.util.List<ReplayVisualEvent> visualEvents
     ) {
-        this.session = new ReplayActorSession(Objects.requireNonNull(scene));
+        this(scene, transport, visualEvents, true, 24);
+    }
+
+    public ReplayActorPlayback(
+        ReplayActorScene scene,
+        ReplayActorTransport transport,
+        java.util.List<ReplayVisualEvent> visualEvents,
+        boolean movementParticlesEnabled,
+        int maxParticlesPerTick
+    ) {
+        this.scene = Objects.requireNonNull(scene);
+        this.session = new ReplayActorSession(scene);
         this.transport = Objects.requireNonNull(transport);
         this.visualTimeline = new ReplayVisualEventTimeline(scene, visualEvents);
+        this.movementPlanner = movementParticlesEnabled
+            ? new ReplayMovementEffectPlanner(Math.max(1, Math.min(64, maxParticlesPerTick)))
+            : null;
     }
 
     public void renderTick(int playbackTick) {
@@ -33,6 +49,10 @@ public final class ReplayActorPlayback implements AutoCloseable {
         }
         transport.apply(session.advanceTo(playbackTick));
         transport.playVisualEvents(visualTimeline.at(playbackTick));
+        if (movementPlanner != null) {
+            transport.playMovementEffects(movementPlanner.advance(
+                playbackTick, scene.at(playbackTick)));
+        }
     }
 
     @Override

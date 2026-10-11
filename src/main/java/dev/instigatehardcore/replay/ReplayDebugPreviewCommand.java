@@ -63,7 +63,11 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             this.pov = pov;
             this.victimId = scene.death().victimId();
             this.transport = new ReplayPacketActorTransport(viewer, scene.worldId());
-            this.playback = new ReplayActorPlayback(scene, transport, events);
+            this.playback = new ReplayActorPlayback(
+                scene, transport, events,
+                plugin.getConfig().getBoolean("death-replay.visuals.movement-particles", true),
+                plugin.getConfig().getInt("death-replay.visuals.max-particles-per-tick", 24)
+            );
         }
 
         void start() {

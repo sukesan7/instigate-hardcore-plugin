@@ -351,7 +351,11 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                         }
                     }
                     newTransport = new ReplayPacketActorTransport(player, scene.worldId());
-                    this.playback = new ReplayActorPlayback(scene, newTransport, visualEvents);
+                    this.playback = new ReplayActorPlayback(
+                        scene, newTransport, visualEvents,
+                        plugin.getConfig().getBoolean("death-replay.visuals.movement-particles", true),
+                        plugin.getConfig().getInt("death-replay.visuals.max-particles-per-tick", 24)
+                    );
                     this.transport = newTransport;
                 } catch (RuntimeException exception) {
                     if (newTransport != null) {

@@ -228,6 +228,18 @@ public final class DeathReplayRecorder {
                 materialName(equipment.getBoots())
             );
 
+        // Ground type is recorded at capture time, not reconstructed from the
+        // later world state. Only players need movement dust in Phase 9F.3.
+        boolean onGround = player != null && player.isOnGround();
+        String groundMaterial = "AIR";
+        if (onGround) {
+            groundMaterial = location.getWorld().getBlockAt(
+                location.getBlockX(),
+                (int) Math.floor(location.getY() - 0.12),
+                location.getBlockZ()
+            ).getType().name();
+        }
+
         return new ReplayActorSnapshot(
             entity.getUniqueId(),
             entity.getType().name(),
@@ -238,7 +250,10 @@ public final class DeathReplayRecorder {
             living != null && living.isGliding(),
             entity.getFireTicks() > 0,
             living != null ? living.getHealth() : -1.0,
-            visualEquipment
+            visualEquipment,
+            player != null && player.isSprinting(),
+            onGround,
+            groundMaterial
         );
     }
 

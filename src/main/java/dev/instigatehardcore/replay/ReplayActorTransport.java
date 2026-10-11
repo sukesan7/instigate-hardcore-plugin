@@ -15,6 +15,9 @@ public interface ReplayActorTransport extends AutoCloseable {
     /** Optional client-side animations, emitted after actor spawn/update. */
     default void playVisualEvents(List<ReplayVisualEvent> events) { }
 
+    /** Optional 9F.3 viewer-only footstep/landing particles. */
+    default void playMovementEffects(List<ReplayMovementEffect> effects) { }
+
 
     @Override
     void close();

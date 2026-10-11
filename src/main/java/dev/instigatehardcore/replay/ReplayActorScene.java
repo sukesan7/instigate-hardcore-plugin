@@ -153,7 +153,8 @@ public final class ReplayActorScene {
                 victim.id(), victim.entityType(), victim.name(),
                 death.x(), death.y(), death.z(), death.yaw(), death.pitch(),
                 victim.sneaking(), victim.gliding(), victim.burning(),
-                0.0, victim.equipment()
+                0.0, victim.equipment(),
+                victim.sprinting(), victim.onGround(), victim.groundMaterial()
             ));
         }
         return Collections.unmodifiableMap(result);

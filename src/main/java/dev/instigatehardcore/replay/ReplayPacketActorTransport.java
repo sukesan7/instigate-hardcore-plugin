@@ -32,6 +32,7 @@ import io.github.retrooper.packetevents.util.SpigotConversionUtil;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.Particle;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
@@ -134,6 +135,40 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
         }
     }
 
+    /** Display only recorded movement effects to this replay's spectator. */
+    @Override
+    public void playMovementEffects(List<ReplayMovementEffect> effects) {
+        assertMainThread();
+        if (closed || !viewer.isOnline()
+            || !viewer.getWorld().getUID().equals(replayWorldId)) {
+            return;
+        }
+        for (ReplayMovementEffect effect : Objects.requireNonNull(effects)) {
+            ReplayActorPose pose = effect.pose();
+            Ghost ghost = ghosts.get(pose.id());
+            if (ghost == null || !ghost.player()) {
+                continue;
+            }
+            Material ground = Material.matchMaterial(pose.groundMaterial());
+            if (ground == null || !ground.isBlock() || !ground.isSolid()) {
+                continue; // Air, water and unsupported materials emit no block dust.
+            }
+            try {
+                var blockData = ground.createBlockData();
+                double spread = effect.kind() == ReplayMovementEffect.Kind.LANDING_DUST
+                    ? 0.32 : 0.16;
+                viewer.spawnParticle(
+                    Particle.BLOCK_CRUMBLE,
+                    pose.x(), pose.y() + 0.06, pose.z(),
+                    effect.particleCount(), spread, 0.05, spread,
+                    0.015, blockData
+                );
+            } catch (IllegalArgumentException exception) {
+                // Unusual material/block data: omit particles, never break replay.
+            }
+        }
+    }
+
     /** Experimental victim point-of-view; the normal default remains free spectator. */
     public boolean focusOnActor(UUID actorId) {
         assertMainThread();
@@ -228,7 +263,8 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
         send(new WrapperPlayServerEntityHeadLook(ghost.entityId(), pose.yaw()));
         if (ghost.lastPose().sneaking() != pose.sneaking()
             || ghost.lastPose().burning() != pose.burning()
-            || ghost.lastPose().gliding() != pose.gliding()) {
+            || ghost.lastPose().gliding() != pose.gliding()
+            || ghost.lastPose().sprinting() != pose.sprinting()) {
             sendMetadata(ghost.entityId(), pose);
         }
         if (!ghost.lastPose().equipment().equals(pose.equipment())) {
@@ -238,9 +274,10 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
     }
 
     private void sendMetadata(int id, ReplayActorPose pose) {
-        // Shared entity flags: on fire 0x01, crouching 0x02, gliding 0x80.
+        // Shared entity flags: fire 0x01, crouch 0x02, sprint 0x08, glide 0x80.
         int flags = (pose.burning() ? 0x01 : 0)
             | (pose.sneaking() ? 0x02 : 0)
+            | (pose.sprinting() ? 0x08 : 0)
             | (pose.gliding() ? 0x80 : 0);
 
         List<EntityData<?>> metadata = new ArrayList<>(2);
