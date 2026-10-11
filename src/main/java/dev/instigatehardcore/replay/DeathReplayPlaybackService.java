@@ -16,7 +16,6 @@ import org.bukkit.util.Vector;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -132,6 +131,8 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
         final List<ReplayCreeperExplosionEvent> explosions;
         final Location deathLocation;
         final BiConsumer<Boolean, Integer> callback;
+        // Precomputed once, not scanned for every viewer joining a replay.
+        final Set<UUID> recordedActorIds;
         final Map<UUID, Viewer> viewers = new HashMap<>();
         BukkitTask warmupTask;
         BukkitTask frameTask;
@@ -152,6 +153,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
             this.explosions = List.copyOf(explosions);
             this.deathLocation = deathLocation;
             this.callback = callback;
+            this.recordedActorIds = ReplayViewerActorIndex.fromClip(clip);
         }
 
         void beginAfterRespawn() {
@@ -212,7 +214,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                 if (!viewer.player.isOnline() || viewer.player.isDead()
                     || viewer.player.getGameMode() != GameMode.SPECTATOR
                     || !viewer.player.getWorld().getUID().equals(scene.worldId())) {
-                    viewer.close();
+                    safeCloseViewer(viewer);
                     iterator.remove();
                 }
             }
@@ -225,7 +227,9 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                     Viewer viewer = iterator.next().getValue();
                     try {
                         viewer.playback.renderTick(tick);
-                        if (tick % 20 == 0) {
+                        if (viewer.cinematic != null) {
+                            viewer.cinematic.renderTick(tick);
+                        } else if (tick % 20 == 0) {
                             int left = Math.max(0, (scene.durationTicks() - tick + 19) / 20);
                             viewer.player.sendActionBar(
                                 InstigateTheme.chat(
@@ -240,7 +244,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                             "Death replay failed for viewer " + viewer.player.getName(),
                             viewerFailure
                         );
-                        viewer.close();
+                        safeCloseViewer(viewer);
                         iterator.remove();
                     }
                 }
@@ -275,6 +279,16 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
             }
         }
 
+        private void safeCloseViewer(Viewer viewer) {
+            try {
+                viewer.close();
+            } catch (RuntimeException exception) {
+                plugin.getLogger().log(Level.WARNING,
+                    "Unexpected viewer replay cleanup failure for "
+                        + viewer.player.getName(), exception);
+            }
+        }
+
         void shutdown(boolean restoreViewersToDeath) {
             if (finished) {
                 return;
@@ -289,7 +303,9 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                 frameTask = null;
             }
             for (Viewer viewer : List.copyOf(viewers.values())) {
-                viewer.close();
+                // One viewer's packet/HUD cleanup must never strand others or
+                // prevent the world-reset completion callback from running.
+                safeCloseViewer(viewer);
                 if (restoreViewersToDeath && viewer.player.isOnline()
                     && viewer.player.getGameMode() == GameMode.SPECTATOR
                     && viewer.player.getWorld().getUID().equals(scene.worldId())) {
@@ -310,6 +326,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
             final List<Entity> hiddenActors = new ArrayList<>();
             final ReplayPacketActorTransport transport;
             final ReplayActorPlayback playback;
+            final ReplayCinematicView cinematic;
             boolean closed;
 
             Viewer(Player player) {
@@ -339,14 +356,9 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                 // Treat hiding + packet transport as one transaction:
                 // a failed setup must not strand invisible live entities.
                 ReplayPacketActorTransport newTransport = null;
+                ReplayCinematicView newCinematic = null;
                 try {
-                    Set<UUID> actorIds = new HashSet<>();
-                    for (ReplayFrame frame : clip.frames()) {
-                        for (ReplayActorSnapshot actor : frame.actors()) {
-                            actorIds.add(actor.entityId());
-                        }
-                    }
-                    for (UUID actorId : actorIds) {
+                    for (UUID actorId : recordedActorIds) {
                         Entity live = Bukkit.getEntity(actorId);
                         if (live != null && !live.equals(player)
                             && live.getWorld().getUID().equals(scene.worldId())) {
@@ -358,10 +370,19 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                     this.playback = new ReplayActorPlayback(
                         scene, newTransport, visualEvents, explosions,
                         plugin.getConfig().getBoolean("death-replay.visuals.movement-particles", true),
-                        plugin.getConfig().getInt("death-replay.visuals.max-particles-per-tick", 24)
+                        ReplayEffectBudget.movementParticlesPerTick(plugin.getConfig().getInt(
+                            "death-replay.visuals.max-particles-per-tick",
+                            ReplayEffectBudget.DEFAULT_PARTICLES_PER_TICK))
                     );
                     this.transport = newTransport;
+                    if (plugin.getConfig().getBoolean("death-replay.cinematic.enabled", true)) {
+                        newCinematic = new ReplayCinematicView(plugin, player, scene, true);
+                    }
+                    this.cinematic = newCinematic;
                 } catch (RuntimeException exception) {
+                    if (newCinematic != null) {
+                        try { newCinematic.close(); } catch (RuntimeException ignored) { }
+                    }
                     if (newTransport != null) {
                         try {
                             newTransport.close();
@@ -387,6 +408,15 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                     return;
                 }
                 closed = true;
+                if (cinematic != null) {
+                    try {
+                        cinematic.close();
+                    } catch (RuntimeException exception) {
+                        plugin.getLogger().log(
+                            Level.WARNING, "Could not fully clear deathcam HUD.", exception
+                        );
+                    }
+                }
                 try {
                     playback.close();
                 } catch (RuntimeException exception) {

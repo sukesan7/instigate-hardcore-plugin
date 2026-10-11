@@ -7,6 +7,7 @@ import com.github.retrooper.packetevents.protocol.player.InteractionHand;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityDataTypes;
 import com.github.retrooper.packetevents.protocol.entity.type.EntityType;
+import com.github.retrooper.packetevents.protocol.vector.vecdelta.LinearVecDelta;
 import com.github.retrooper.packetevents.protocol.entity.type.EntityTypes;
 import com.github.retrooper.packetevents.protocol.player.Equipment;
 import com.github.retrooper.packetevents.protocol.player.EquipmentSlot;
@@ -22,6 +23,7 @@ import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEn
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityHeadLook;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityTeleport;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityRelativeMoveAndRotation;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityAnimation;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerHurtAnimation;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerSwingAnimation;
@@ -62,7 +64,10 @@ import java.util.UUID;
  * Phase 9F.2 adds ghost-only combat animation packets.
  */
 public final class ReplayPacketActorTransport implements ReplayActorTransport {
-    private record Ghost(int entityId, UUID profileId, boolean player, ReplayActorPose lastPose) { }
+    private record Ghost(
+        int entityId, UUID profileId, boolean player, ReplayActorPose lastPose,
+        double sentX, double sentY, double sentZ
+    ) { }
 
     private final Player viewer;
     private final UUID replayWorldId;
@@ -261,7 +266,7 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
         );
 
         // Register before sending, so even partial spawns are cleaned up.
-        ghosts.put(pose.id(), new Ghost(entityId, fakeUuid, isPlayer, pose));
+        ghosts.put(pose.id(), new Ghost(entityId, fakeUuid, isPlayer, pose, pose.x(), pose.y(), pose.z()));
         if (isPlayer) {
             UserProfile profile = new UserProfile(fakeUuid, trimmedName(pose.name()), textureProperties(pose.id()));
             var playerInfo = new WrapperPlayServerPlayerInfoUpdate.PlayerInfo(
@@ -300,11 +305,45 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
             spawn(pose);
             return;
         }
-        send(new WrapperPlayServerEntityTeleport(
-            ghost.entityId(), new Vector3d(pose.x(), pose.y(), pose.z()),
-            pose.yaw(), pose.pitch(), false
-        ));
-        send(new WrapperPlayServerEntityHeadLook(ghost.entityId(), pose.yaw()));
+        // Use interpolated relative movement for ordinary replay motion.
+        // Packet positions are quantized, so carry forward the *encoded*
+        // coordinate, not the unrounded scene target. This prevents drift.
+        ReplayEntityMotion.Plan motion = ReplayEntityMotion.plan(
+            ghost.sentX(), ghost.sentY(), ghost.sentZ(),
+            pose.x(), pose.y(), pose.z(),
+            ghost.lastPose().yaw(), ghost.lastPose().pitch(),
+            pose.yaw(), pose.pitch()
+        );
+        double sentX = ghost.sentX();
+        double sentY = ghost.sentY();
+        double sentZ = ghost.sentZ();
+        switch (motion.kind()) {
+            case NONE -> { /* No movement packet needed. */ }
+            case RELATIVE -> {
+                LinearVecDelta delta = new LinearVecDelta(
+                    motion.dx(), motion.dy(), motion.dz()
+                );
+                send(new WrapperPlayServerEntityRelativeMoveAndRotation(
+                    ghost.entityId(), delta, pose.yaw(), pose.pitch(),
+                    pose.onGround()
+                ));
+                sentX += delta.dx();
+                sentY += delta.dy();
+                sentZ += delta.dz();
+            }
+            case TELEPORT -> {
+                send(new WrapperPlayServerEntityTeleport(
+                    ghost.entityId(), new Vector3d(pose.x(), pose.y(), pose.z()),
+                    pose.yaw(), pose.pitch(), pose.onGround()
+                ));
+                sentX = pose.x();
+                sentY = pose.y();
+                sentZ = pose.z();
+            }
+        }
+        if (ghost.lastPose().yaw() != pose.yaw()) {
+            send(new WrapperPlayServerEntityHeadLook(ghost.entityId(), pose.yaw()));
+        }
         if (ghost.lastPose().sneaking() != pose.sneaking()
             || ghost.lastPose().burning() != pose.burning()
             || ghost.lastPose().gliding() != pose.gliding()
@@ -320,7 +359,7 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
         if (!ghost.lastPose().equipment().equals(pose.equipment())) {
             sendEquipment(ghost.entityId(), pose.equipment());
         }
-        ghosts.put(pose.id(), new Ghost(ghost.entityId(), ghost.profileId(), ghost.player(), pose));
+        ghosts.put(pose.id(), new Ghost(ghost.entityId(), ghost.profileId(), ghost.player(), pose, sentX, sentY, sentZ));
     }
 
     private void sendMetadata(int id, ReplayActorPose pose) {

@@ -20,14 +20,29 @@ scoreboard:
 
 death-replay:
   enabled: true
+  automatic-playback-enabled: true
   debug-preview-enabled: true
+
   duration-seconds: 7
   capture-interval-ticks: 2
   capture-radius-blocks: 24
   max-actors-per-frame: 48
+
   visuals:
     movement-particles: true
     max-particles-per-tick: 24
+
+  cinematic:
+    enabled: true
+    hide-scoreboard: true
+
+  camera:
+    tracking-enabled: true
+    collision-check: true
+    follow-distance: 4.5
+    height: 2.2
+    shoulder-offset: 0.8
+    smoothing: 0.25
 
 worlds:
   # Permanent safety/fallback world.

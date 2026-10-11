@@ -16,7 +16,6 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -45,7 +44,9 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
         final ReplayActorScene scene;
         final ReplayClip clip;
         final boolean pov;
+        final boolean cinematicMode;
         final UUID victimId;
+        ReplayCinematicView cinematic;
         final List<Entity> hiddenLiveActors = new ArrayList<>();
         BukkitTask tickTask;
         int tick;
@@ -54,7 +55,7 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
 
         Preview(
             Player viewer, ReplayActorScene scene, ReplayClip clip,
-            boolean pov, List<ReplayVisualEvent> events,
+            boolean pov, boolean cinematicMode, List<ReplayVisualEvent> events,
             List<ReplayCreeperExplosionEvent> explosions
         ) {
             this.viewer = viewer;
@@ -62,30 +63,30 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             this.scene = scene;
             this.clip = clip;
             this.pov = pov;
+            this.cinematicMode = cinematicMode;
             this.victimId = scene.death().victimId();
             this.transport = new ReplayPacketActorTransport(viewer, scene.worldId());
             this.playback = new ReplayActorPlayback(
                 scene, transport, events, explosions,
                 plugin.getConfig().getBoolean("death-replay.visuals.movement-particles", true),
-                plugin.getConfig().getInt("death-replay.visuals.max-particles-per-tick", 24)
+                ReplayEffectBudget.movementParticlesPerTick(plugin.getConfig().getInt(
+                    "death-replay.visuals.max-particles-per-tick",
+                    ReplayEffectBudget.DEFAULT_PARTICLES_PER_TICK))
             );
         }
 
         void start() {
             // Keep the viewer from seeing real entities overlaid on their own ghosts.
             // hideEntity() only affects this viewer and is reversed in close().
-            var actorIds = new HashSet<UUID>();
-            for (ReplayFrame frame : sceneFrames()) {
-                for (ReplayActorSnapshot actor : frame.actors()) {
-                    actorIds.add(actor.entityId());
-                }
-            }
-            for (UUID actorId : actorIds) {
+            for (UUID actorId : ReplayViewerActorIndex.fromClip(clip)) {
                 Entity live = Bukkit.getEntity(actorId);
                 if (live != null && !live.equals(viewer) && live.getWorld().getUID().equals(worldId)) {
                     viewer.hideEntity(plugin, live);
                     hiddenLiveActors.add(live);
                 }
+            }
+            if (cinematicMode) {
+                cinematic = new ReplayCinematicView(plugin, viewer, scene, true);
             }
             tickTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
                 if (closed) {
@@ -98,6 +99,9 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
                 }
                 try {
                     playback.renderTick(tick);
+                    if (cinematic != null) {
+                        cinematic.renderTick(tick);
+                    }
                     if (pov && !focused) {
                         focused = transport.focusOnActor(victimId);
                     }
@@ -111,17 +115,20 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             }, 1L, 1L);
         }
 
-        private List<ReplayFrame> sceneFrames() {
-            // The source frames are immutable; expose them here rather than duplicating them.
-            return clip.frames();
-        }
-
         @Override
         public void close() {
             if (closed) return;
             closed = true;
             if (tickTask != null) {
                 tickTask.cancel();
+            }
+            if (cinematic != null) {
+                try {
+                    cinematic.close();
+                } catch (RuntimeException exception) {
+                    plugin.getLogger().log(Level.WARNING, "Replay preview HUD cleanup failed.", exception);
+                }
+                cinematic = null;
             }
             try {
                 playback.close();
@@ -130,7 +137,13 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             } finally {
                 if (viewer.isOnline()) {
                     for (Entity live : hiddenLiveActors) {
-                        viewer.showEntity(plugin, live);
+                        try {
+                            viewer.showEntity(plugin, live);
+                        } catch (RuntimeException exception) {
+                            // A live entity may have despawned; restore the rest.
+                            plugin.getLogger().log(Level.FINE,
+                                "Could not restore a hidden preview actor.", exception);
+                        }
                     }
                 }
                 hiddenLiveActors.clear();
@@ -165,7 +178,7 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             return true;
         }
         if (args.length < 1 || args.length > 2) {
-            viewer.sendMessage("Usage: /hcreplaytest <survival-player> [pov]");
+            viewer.sendMessage("Usage: /hcreplaytest <survival-player> [pov|cinematic]");
             return true;
         }
         if (viewer.getGameMode() != GameMode.SPECTATOR) {
@@ -215,13 +228,20 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             new FrozenDeathReplay(clip, terminal, List.of(), visualEvents, explosions)
         );
         boolean pov = args.length == 2 && args[1].equalsIgnoreCase("pov");
+        boolean cinematicMode = args.length == 2 && args[1].equalsIgnoreCase("cinematic");
+        if (args.length == 2 && !pov && !cinematicMode) {
+            viewer.sendMessage("Second argument must be 'pov' or 'cinematic'.");
+            return true;
+        }
         finish(viewer.getUniqueId());
         try {
-            Preview preview = new Preview(viewer, scene, clip, pov, visualEvents, explosions);
+            Preview preview = new Preview(viewer, scene, clip, pov, cinematicMode,
+                visualEvents, explosions);
             active.put(viewer.getUniqueId(), preview);
             preview.start();
             viewer.sendMessage("Replaying recorded actors for 7 seconds (test only; no death/reset)."
-                + (pov ? " POV camera enabled." : " Free spectator camera."));
+                + (pov ? " POV camera enabled." : cinematicMode
+                    ? " Cinematic tracking camera enabled." : " Free spectator camera."));
         } catch (RuntimeException exception) {
             plugin.getLogger().log(Level.WARNING, "Unable to start debug replay preview.", exception);
             finish(viewer.getUniqueId());
@@ -238,7 +258,12 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
     private void finish(UUID viewerId) {
         Preview preview = active.remove(viewerId);
         if (preview != null) {
-            preview.close();
+            try {
+                preview.close();
+            } catch (RuntimeException exception) {
+                plugin.getLogger().log(Level.WARNING,
+                    "Replay preview cleanup failed for " + viewerId, exception);
+            }
         }
     }
 
