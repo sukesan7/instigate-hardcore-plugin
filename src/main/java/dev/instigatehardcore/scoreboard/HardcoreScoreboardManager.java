@@ -30,14 +30,9 @@ import java.util.Objects;
 
 public final class HardcoreScoreboardManager {
 
-    /*
-     * We deliberately stay below Minecraft's sidebar line limit.
-     *
-     * If the server has many historical players, the scoreboard
-     * shows the highest death totals and summarizes the rest.
-     */
-    private static final int MAX_DEATH_ROWS =
-        9;
+    // Vanilla sidebar supports 15 lines. Four are fixed metadata/headers,
+    // leaving eleven for players. Larger histories rotate through pages.
+    private static final int MAX_DEATH_ROWS = 11;
 
     private static final String OBJECTIVE_NAME =
         "instigate_hc";
@@ -320,70 +315,32 @@ public final class HardcoreScoreboardManager {
             return lines;
         }
 
-        int visiblePlayers =
-            players.size();
+        int pageCount = Math.max(1,
+            (players.size() + MAX_DEATH_ROWS - 1) / MAX_DEATH_ROWS
+        );
+        int intervalSeconds = Math.max(1,
+            plugin.getConfig().getInt("scoreboard.page-interval-seconds", 10)
+        );
+        int page = (int) ((Bukkit.getCurrentTick() / (20L * intervalSeconds))
+            % pageCount);
+        int first = page * MAX_DEATH_ROWS;
+        int last = Math.min(first + MAX_DEATH_ROWS, players.size());
 
-        boolean needsOverflowRow =
-            visiblePlayers
-                > MAX_DEATH_ROWS;
-
-        if (needsOverflowRow) {
-            /*
-             * Reserve one row for "+N more".
-             */
-            visiblePlayers =
-                MAX_DEATH_ROWS
-                    - 1;
+        // Reuse the existing heading without spending another sidebar row.
+        if (pageCount > 1) {
+            lines.set(3, Component.text("Deaths " + (page + 1) + "/" + pageCount,
+                InstigateTheme.PURPLE).decorate(TextDecoration.BOLD));
         }
 
-        for (
-            int index = 0;
-            index < visiblePlayers;
-            index++
-        ) {
-            PlayerStats player =
-                players.get(
-                    index
-                );
-
+        for (int index = first; index < last; index++) {
+            PlayerStats player = players.get(index);
             lines.add(
                 Component.text()
-                    .append(
-                        Component.text(
-                            player.name(),
-                            InstigateTheme.TEXT
-                        )
-                    )
-                    .append(
-                        InstigateTheme.muted(
-                            "  "
-                        )
-                    )
-                    .append(
-                        Component.text(
-                            Integer.toString(
-                                player.deaths()
-                            ),
-                            player.deaths() > 0
-                                ? InstigateTheme.PURPLE
-                                : InstigateTheme.MUTED
-                        )
-                    )
+                    .append(Component.text(player.name(), InstigateTheme.TEXT))
+                    .append(InstigateTheme.muted("  "))
+                    .append(Component.text(Integer.toString(player.deaths()),
+                        player.deaths() > 0 ? InstigateTheme.PURPLE : InstigateTheme.MUTED))
                     .build()
-            );
-        }
-
-        if (needsOverflowRow) {
-            int hidden =
-                players.size()
-                    - visiblePlayers;
-
-            lines.add(
-                InstigateTheme.muted(
-                    "+"
-                        + hidden
-                        + " more"
-                )
             );
         }
 

@@ -8,6 +8,8 @@ import dev.instigatehardcore.core.RunManager;
 
 import dev.instigatehardcore.countdown.CountdownManager;
 
+import dev.instigatehardcore.listener.AttemptAdvancementResetListener;
+import dev.instigatehardcore.listener.LowHealthAlertMonitor;
 import dev.instigatehardcore.listener.DeathListener;
 import dev.instigatehardcore.listener.PlayerJoinListener;
 import dev.instigatehardcore.listener.PlayerQuitListener;
@@ -86,6 +88,8 @@ public final class InstigateHardcore extends JavaPlugin {
     private ReplayDebugPreviewCommand replayDebugPreviewCommand;
     private DeathReplayPlaybackService deathReplayPlaybackService;
 
+    private LowHealthAlertMonitor lowHealthAlertMonitor;
+
     private BukkitTask telemetryCheckpointTask;
 
     @Override
@@ -159,6 +163,7 @@ public final class InstigateHardcore extends JavaPlugin {
         initializeDeathReplayCapture();
 
         registerListeners();
+        initializeQolServices();
 
         if (!initializeCommands()) {
             return;
@@ -181,6 +186,11 @@ public final class InstigateHardcore extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (lowHealthAlertMonitor != null) {
+            lowHealthAlertMonitor.stop();
+            lowHealthAlertMonitor = null;
+        }
+
         // Cancel automatic packet-only ghosts before their dependencies.
         if (deathReplayPlaybackService != null) {
             deathReplayPlaybackService.close();
@@ -730,6 +740,34 @@ public final class InstigateHardcore extends JavaPlugin {
      * LISTENERS
      * ------------------------------------------------------------
      */
+
+    private void initializeQolServices() {
+        if (getConfig().getBoolean("advancements.reset-per-attempt", true)) {
+            getServer().getPluginManager().registerEvents(
+                new AttemptAdvancementResetListener(this, worldSetManager), this
+            );
+            getLogger().info("Per-attempt advancement resets enabled.");
+        }
+
+        if (getConfig().getBoolean("alerts.low-health.enabled", true)) {
+            double threshold = getConfig().getDouble(
+                "alerts.low-health.threshold-hearts", 2.0
+            );
+            double rearm = getConfig().getDouble(
+                "alerts.low-health.rearm-hearts", 3.0
+            );
+            if (!(threshold > 0.0 && rearm > threshold)) {
+                getLogger().warning("Invalid low-health thresholds; using 2/3 hearts.");
+                threshold = 2.0;
+                rearm = 3.0;
+            }
+            lowHealthAlertMonitor = new LowHealthAlertMonitor(
+                this, runManager, worldSetManager, threshold, rearm
+            );
+            lowHealthAlertMonitor.start();
+            getLogger().info("Global low-health alerts enabled.");
+        }
+    }
 
     private void registerListeners() {
         boolean allowLateJoiners =
