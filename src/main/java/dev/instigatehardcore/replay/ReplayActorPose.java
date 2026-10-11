@@ -20,7 +20,8 @@ public record ReplayActorPose(
     ReplayEquipment equipment,
     boolean sprinting,
     boolean onGround,
-    String groundMaterial
+    String groundMaterial,
+    ReplayCreeperState creeperState
 ) {
     /** Source-compatible constructor for pre-9F.3 actor poses. */
     public ReplayActorPose(
@@ -31,7 +32,20 @@ public record ReplayActorPose(
     ) {
         this(id, entityType, name, x, y, z, yaw, pitch,
             sneaking, gliding, burning, health, equipment,
-            false, false, "AIR");
+            false, false, "AIR", ReplayCreeperState.NONE);
+    }
+
+    /** Source-compatible Phase 9F.3 constructor. */
+    public ReplayActorPose(
+        UUID id, String entityType, String name,
+        double x, double y, double z, float yaw, float pitch,
+        boolean sneaking, boolean gliding, boolean burning,
+        double health, ReplayEquipment equipment,
+        boolean sprinting, boolean onGround, String groundMaterial
+    ) {
+        this(id, entityType, name, x, y, z, yaw, pitch,
+            sneaking, gliding, burning, health, equipment,
+            sprinting, onGround, groundMaterial, ReplayCreeperState.NONE);
     }
 
     public ReplayActorPose {
@@ -40,6 +54,7 @@ public record ReplayActorPose(
         Objects.requireNonNull(name);
         Objects.requireNonNull(equipment);
         Objects.requireNonNull(groundMaterial);
+        Objects.requireNonNull(creeperState);
         if (entityType.isBlank()) {
             throw new IllegalArgumentException("Entity type must not be blank.");
         }
@@ -56,7 +71,8 @@ public record ReplayActorPose(
             snapshot.x(), snapshot.y(), snapshot.z(), snapshot.yaw(),
             snapshot.pitch(), snapshot.sneaking(), snapshot.gliding(),
             snapshot.burning(), snapshot.health(), snapshot.equipment(),
-            snapshot.sprinting(), snapshot.onGround(), snapshot.groundMaterial()
+            snapshot.sprinting(), snapshot.onGround(), snapshot.groundMaterial(),
+            snapshot.creeperState()
         );
     }
 
@@ -88,7 +104,8 @@ public record ReplayActorPose(
             previous.sneaking(), previous.gliding(), previous.burning(),
             mix(previous.health(), next.health(), fraction),
             previous.equipment(),
-            previous.sprinting(), previous.onGround(), previous.groundMaterial()
+            previous.sprinting(), previous.onGround(), previous.groundMaterial(),
+            previous.creeperState()
         );
     }
 

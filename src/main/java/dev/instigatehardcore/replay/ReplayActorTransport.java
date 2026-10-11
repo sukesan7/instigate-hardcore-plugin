@@ -19,6 +19,9 @@ public interface ReplayActorTransport extends AutoCloseable {
     default void playMovementEffects(List<ReplayMovementEffect> effects) { }
 
 
+    /** Optional 9F.3b effects. Independent of whether the actor is still alive. */
+    default void playCreeperExplosions(List<ReplayCreeperExplosionEvent> events) { }
+
     @Override
     void close();
 }

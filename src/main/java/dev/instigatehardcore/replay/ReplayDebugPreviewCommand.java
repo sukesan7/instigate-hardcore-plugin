@@ -54,7 +54,8 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
 
         Preview(
             Player viewer, ReplayActorScene scene, ReplayClip clip,
-            boolean pov, List<ReplayVisualEvent> events
+            boolean pov, List<ReplayVisualEvent> events,
+            List<ReplayCreeperExplosionEvent> explosions
         ) {
             this.viewer = viewer;
             this.worldId = scene.worldId();
@@ -64,7 +65,7 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             this.victimId = scene.death().victimId();
             this.transport = new ReplayPacketActorTransport(viewer, scene.worldId());
             this.playback = new ReplayActorPlayback(
-                scene, transport, events,
+                scene, transport, events, explosions,
                 plugin.getConfig().getBoolean("death-replay.visuals.movement-particles", true),
                 plugin.getConfig().getInt("death-replay.visuals.max-particles-per-tick", 24)
             );
@@ -206,13 +207,17 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             subject.getUniqueId(), clip.attempt(), clip.worldId(),
             clip.frames().getFirst().tick(), terminal.tick()
         );
+        List<ReplayCreeperExplosionEvent> explosions = combatRecorder.snapshotExplosionsFor(
+            subject.getUniqueId(), clip.attempt(), clip.worldId(),
+            clip.frames().getFirst().tick(), terminal.tick()
+        );
         ReplayActorScene scene = new ReplayActorScene(
-            new FrozenDeathReplay(clip, terminal, List.of(), visualEvents)
+            new FrozenDeathReplay(clip, terminal, List.of(), visualEvents, explosions)
         );
         boolean pov = args.length == 2 && args[1].equalsIgnoreCase("pov");
         finish(viewer.getUniqueId());
         try {
-            Preview preview = new Preview(viewer, scene, clip, pov, visualEvents);
+            Preview preview = new Preview(viewer, scene, clip, pov, visualEvents, explosions);
             active.put(viewer.getUniqueId(), preview);
             preview.start();
             viewer.sendMessage("Replaying recorded actors for 7 seconds (test only; no death/reset)."

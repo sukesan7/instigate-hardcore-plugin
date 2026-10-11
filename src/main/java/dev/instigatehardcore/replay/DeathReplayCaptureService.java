@@ -92,13 +92,17 @@ public final class DeathReplayCaptureService {
                 victim.getUniqueId(), ReplayVisualEvent.Kind.CRITICAL
             ));
         }
-        lastFrozen = new FrozenDeathReplay(clip, death, events, visualEvents);
+        List<ReplayCreeperExplosionEvent> explosions = combatRecorder.snapshotExplosionsFor(
+            victim.getUniqueId(), clip.attempt(), clip.worldId(), startTick, death.tick()
+        );
+        lastFrozen = new FrozenDeathReplay(clip, death, events, visualEvents, explosions);
         plugin.getLogger().info(
             "Frozen Phase 9B death replay: attempt #" + clip.attempt()
                 + ", victim=" + victim.getName()
                 + ", frames=" + clip.frames().size()
                 + ", combatEvents=" + events.size()
                 + ", visualEvents=" + visualEvents.size()
+                + ", creeperExplosions=" + explosions.size()
                 + " (ready for optional playback)."
         );
         return Optional.of(lastFrozen);

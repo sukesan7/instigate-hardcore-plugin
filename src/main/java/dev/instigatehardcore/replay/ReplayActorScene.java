@@ -154,7 +154,8 @@ public final class ReplayActorScene {
                 death.x(), death.y(), death.z(), death.yaw(), death.pitch(),
                 victim.sneaking(), victim.gliding(), victim.burning(),
                 0.0, victim.equipment(),
-                victim.sprinting(), victim.onGround(), victim.groundMaterial()
+                victim.sprinting(), victim.onGround(), victim.groundMaterial(),
+                victim.creeperState()
             ));
         }
         return Collections.unmodifiableMap(result);

@@ -8,6 +8,7 @@ import dev.instigatehardcore.world.WorldSetManager;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Creeper;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
@@ -240,6 +241,14 @@ public final class DeathReplayRecorder {
             ).getType().name();
         }
 
+        ReplayCreeperState creeperState = entity instanceof Creeper creeper
+            ? new ReplayCreeperState(
+                Math.max(0, creeper.getFuseTicks()),
+                Math.max(1, creeper.getMaxFuseTicks()),
+                creeper.isIgnited(), creeper.isPowered()
+            )
+            : ReplayCreeperState.NONE;
+
         return new ReplayActorSnapshot(
             entity.getUniqueId(),
             entity.getType().name(),
@@ -253,7 +262,8 @@ public final class DeathReplayRecorder {
             visualEquipment,
             player != null && player.isSprinting(),
             onGround,
-            groundMaterial
+            groundMaterial,
+            creeperState
         );
     }
 

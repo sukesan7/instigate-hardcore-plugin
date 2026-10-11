@@ -13,6 +13,7 @@ public final class ReplayActorPlayback implements AutoCloseable {
     private final ReplayActorTransport transport;
     private final ReplayVisualEventTimeline visualTimeline;
     private final ReplayMovementEffectPlanner movementPlanner;
+    private final ReplayCreeperExplosionTimeline explosionTimeline;
     private boolean closed;
 
     public ReplayActorPlayback(ReplayActorScene scene, ReplayActorTransport transport) {
@@ -34,10 +35,23 @@ public final class ReplayActorPlayback implements AutoCloseable {
         boolean movementParticlesEnabled,
         int maxParticlesPerTick
     ) {
+        this(scene, transport, visualEvents, java.util.List.of(),
+            movementParticlesEnabled, maxParticlesPerTick);
+    }
+
+    public ReplayActorPlayback(
+        ReplayActorScene scene,
+        ReplayActorTransport transport,
+        java.util.List<ReplayVisualEvent> visualEvents,
+        java.util.List<ReplayCreeperExplosionEvent> explosions,
+        boolean movementParticlesEnabled,
+        int maxParticlesPerTick
+    ) {
         this.scene = Objects.requireNonNull(scene);
         this.session = new ReplayActorSession(scene);
         this.transport = Objects.requireNonNull(transport);
         this.visualTimeline = new ReplayVisualEventTimeline(scene, visualEvents);
+        this.explosionTimeline = new ReplayCreeperExplosionTimeline(scene, explosions);
         this.movementPlanner = movementParticlesEnabled
             ? new ReplayMovementEffectPlanner(Math.max(1, Math.min(64, maxParticlesPerTick)))
             : null;
@@ -49,6 +63,7 @@ public final class ReplayActorPlayback implements AutoCloseable {
         }
         transport.apply(session.advanceTo(playbackTick));
         transport.playVisualEvents(visualTimeline.at(playbackTick));
+        transport.playCreeperExplosions(explosionTimeline.at(playbackTick));
         if (movementPlanner != null) {
             transport.playMovementEffects(movementPlanner.advance(
                 playbackTick, scene.at(playbackTick)));

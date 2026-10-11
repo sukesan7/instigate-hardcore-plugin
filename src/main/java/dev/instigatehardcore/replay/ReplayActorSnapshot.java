@@ -20,7 +20,8 @@ public record ReplayActorSnapshot(
     ReplayEquipment equipment,
     boolean sprinting,
     boolean onGround,
-    String groundMaterial
+    String groundMaterial,
+    ReplayCreeperState creeperState
 ) {
     /** Source-compatible constructor used by earlier phases and tests. */
     public ReplayActorSnapshot(
@@ -31,7 +32,20 @@ public record ReplayActorSnapshot(
     ) {
         this(entityId, entityType, name, x, y, z, yaw, pitch,
             sneaking, gliding, burning, health, equipment,
-            false, false, "AIR");
+            false, false, "AIR", ReplayCreeperState.NONE);
+    }
+
+    /** Source-compatible Phase 9F.3 constructor. */
+    public ReplayActorSnapshot(
+        UUID entityId, String entityType, String name,
+        double x, double y, double z, float yaw, float pitch,
+        boolean sneaking, boolean gliding, boolean burning,
+        double health, ReplayEquipment equipment,
+        boolean sprinting, boolean onGround, String groundMaterial
+    ) {
+        this(entityId, entityType, name, x, y, z, yaw, pitch,
+            sneaking, gliding, burning, health, equipment,
+            sprinting, onGround, groundMaterial, ReplayCreeperState.NONE);
     }
 
     public ReplayActorSnapshot {
@@ -40,6 +54,7 @@ public record ReplayActorSnapshot(
         Objects.requireNonNull(name);
         Objects.requireNonNull(equipment);
         Objects.requireNonNull(groundMaterial);
+        Objects.requireNonNull(creeperState);
         if (groundMaterial.isBlank()) {
             throw new IllegalArgumentException("Ground material must not be blank.");
         }

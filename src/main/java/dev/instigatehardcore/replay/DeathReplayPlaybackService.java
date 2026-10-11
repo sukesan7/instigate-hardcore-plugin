@@ -104,7 +104,8 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
             return false;
         }
 
-        Session session = new Session(scene, frozen.clip(), frozen.visualEvents(), deathLocation.clone(), onFinish);
+        Session session = new Session(scene, frozen.clip(), frozen.visualEvents(),
+            frozen.creeperExplosions(), deathLocation.clone(), onFinish);
         active = session;
         try {
             stopDeveloperPreviews.run();
@@ -128,6 +129,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
         final ReplayActorScene scene;
         final ReplayClip clip;
         final List<ReplayVisualEvent> visualEvents;
+        final List<ReplayCreeperExplosionEvent> explosions;
         final Location deathLocation;
         final BiConsumer<Boolean, Integer> callback;
         final Map<UUID, Viewer> viewers = new HashMap<>();
@@ -140,12 +142,14 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
             ReplayActorScene scene,
             ReplayClip clip,
             List<ReplayVisualEvent> visualEvents,
+            List<ReplayCreeperExplosionEvent> explosions,
             Location deathLocation,
             BiConsumer<Boolean, Integer> callback
         ) {
             this.scene = scene;
             this.clip = clip;
             this.visualEvents = List.copyOf(visualEvents);
+            this.explosions = List.copyOf(explosions);
             this.deathLocation = deathLocation;
             this.callback = callback;
         }
@@ -352,7 +356,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                     }
                     newTransport = new ReplayPacketActorTransport(player, scene.worldId());
                     this.playback = new ReplayActorPlayback(
-                        scene, newTransport, visualEvents,
+                        scene, newTransport, visualEvents, explosions,
                         plugin.getConfig().getBoolean("death-replay.visuals.movement-particles", true),
                         plugin.getConfig().getInt("death-replay.visuals.max-particles-per-tick", 24)
                     );

@@ -33,12 +33,15 @@ import io.github.retrooper.packetevents.util.SpigotConversionUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.Particle;
+import org.bukkit.Sound;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -64,6 +67,7 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
     private final Player viewer;
     private final UUID replayWorldId;
     private final Map<UUID, Ghost> ghosts = new LinkedHashMap<>();
+    private final Set<UUID> detonatedCreepers = new HashSet<>();
     private int cameraTargetId = -1;
     private boolean closed;
 
@@ -89,8 +93,12 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
         }
         for (ReplayActorChange change : changes) {
             switch (change.kind()) {
-                case SPAWN -> spawn(change.pose());
-                case UPDATE -> update(change.pose());
+                case SPAWN -> {
+                    if (!detonatedCreepers.contains(change.actorId())) spawn(change.pose());
+                }
+                case UPDATE -> {
+                    if (!detonatedCreepers.contains(change.actorId())) update(change.pose());
+                }
                 case REMOVE -> remove(change.actorId());
             }
         }
@@ -132,6 +140,39 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
                     WrapperPlayServerEntityAnimation.EntityAnimationType.CRITICAL_HIT
                 ));
             }
+        }
+    }
+
+    /** Viewer-only explosion particles/sound; never call world.createExplosion(). */
+    @Override
+    public void playCreeperExplosions(List<ReplayCreeperExplosionEvent> events) {
+        assertMainThread();
+        if (closed || !viewer.isOnline()
+            || !viewer.getWorld().getUID().equals(replayWorldId)) return;
+        int effectsShown = 0;
+        for (ReplayCreeperExplosionEvent event : Objects.requireNonNull(events)) {
+            if (!event.worldId().equals(replayWorldId)
+                || !detonatedCreepers.add(event.creeperId())) continue;
+            // Always retire the ghost, even when the visual budget is exhausted.
+            remove(event.creeperId());
+            if (effectsShown++ >= 6) continue; // Per-viewer, per-tick cap.
+            double x = event.x();
+            double y = event.y() + 0.45;
+            double z = event.z();
+            // Spectator-only effects, never persisted to the real world.
+            viewer.spawnParticle(
+                Particle.EXPLOSION_EMITTER, x, y, z, 1, 0, 0, 0, 0
+            );
+            if (event.powered()) {
+                viewer.spawnParticle(
+                    Particle.ELECTRIC_SPARK, x, y, z,
+                    18, 0.55, 0.55, 0.55, 0.08
+                );
+            }
+            viewer.playSound(
+                new org.bukkit.Location(viewer.getWorld(), x, y, z),
+                Sound.ENTITY_GENERIC_EXPLODE, 1.0f, event.powered() ? 0.8f : 1.0f
+            );
         }
     }
 
@@ -243,6 +284,9 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
         send(new WrapperPlayServerEntityHeadLook(entityId, pose.yaw()));
         sendMetadata(entityId, pose);
         sendEquipment(entityId, pose.equipment());
+        if (isCreeper(pose) && pose.creeperState().swelling()) {
+            playCreeperPrime(pose);
+        }
     }
 
     private void update(ReplayActorPose pose) {
@@ -264,8 +308,14 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
         if (ghost.lastPose().sneaking() != pose.sneaking()
             || ghost.lastPose().burning() != pose.burning()
             || ghost.lastPose().gliding() != pose.gliding()
-            || ghost.lastPose().sprinting() != pose.sprinting()) {
+            || ghost.lastPose().sprinting() != pose.sprinting()
+            || (isCreeper(pose) && !ghost.lastPose().creeperState()
+                .sameMetadata(pose.creeperState()))) {
             sendMetadata(ghost.entityId(), pose);
+        }
+        if (isCreeper(pose) && !ghost.lastPose().creeperState().swelling()
+            && pose.creeperState().swelling()) {
+            playCreeperPrime(pose);
         }
         if (!ghost.lastPose().equipment().equals(pose.equipment())) {
             sendEquipment(ghost.entityId(), pose.equipment());
@@ -295,8 +345,30 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
             ));
         }
 
+        // Creeper-specific metadata in Minecraft 26.3: swelling direction,
+        // charged appearance and explicitly ignited fuse. These are NOT
+        // player metadata, despite overlapping index numbers.
+        if (isCreeper(pose)) {
+            ReplayCreeperState state = pose.creeperState();
+            metadata.add(new EntityData<>(16, EntityDataTypes.INT,
+                state.swelling() ? 1 : -1));
+            metadata.add(new EntityData<>(17, EntityDataTypes.BOOLEAN, state.powered()));
+            metadata.add(new EntityData<>(18, EntityDataTypes.BOOLEAN, state.ignited()));
+        }
+
         // Called at spawn and on state changes, so overlay flags stay consistent.
         send(new WrapperPlayServerEntityMetadata(id, metadata));
+    }
+
+    private static boolean isCreeper(ReplayActorPose pose) {
+        return "CREEPER".equalsIgnoreCase(pose.entityType());
+    }
+
+    private void playCreeperPrime(ReplayActorPose pose) {
+        viewer.playSound(
+            new org.bukkit.Location(viewer.getWorld(), pose.x(), pose.y(), pose.z()),
+            Sound.ENTITY_CREEPER_PRIMED, 0.75f, 1.0f
+        );
     }
 
     private void sendEquipment(int id, ReplayEquipment equipment) {
@@ -388,5 +460,6 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
             }
         }
         ghosts.clear();
+        detonatedCreepers.clear();
     }
 }

@@ -7,6 +7,7 @@ import dev.instigatehardcore.world.WorldSetManager;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Creeper;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Projectile;
@@ -15,6 +16,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.ExplosionPrimeEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -32,6 +34,7 @@ import java.util.UUID;
 public final class ReplayCombatRecorder implements Listener {
     private static final int MAX_EVENTS_PER_PLAYER = 256;
     private static final int MAX_VISUAL_EVENTS_PER_PLAYER = 384;
+    private static final int MAX_EXPLOSIONS_PER_PLAYER = 64;
 
     private final JavaPlugin plugin;
     private final RunManager runManager;
@@ -41,6 +44,7 @@ public final class ReplayCombatRecorder implements Listener {
     private final int radius;
     private final Map<UUID, RollingReplayEventBuffer> buffers = new HashMap<>();
     private final Map<UUID, RollingReplayVisualEventBuffer> visualBuffers = new HashMap<>();
+    private final Map<UUID, RollingReplayCreeperExplosionBuffer> explosionBuffers = new HashMap<>();
     private int recordedAttempt = -1;
 
     public ReplayCombatRecorder(
@@ -147,6 +151,38 @@ public final class ReplayCombatRecorder implements Listener {
             player.getUniqueId(), kind);
     }
 
+    /** Observe only real, non-cancelled creeper explosions. Never cause an explosion. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onCreeperExplosion(ExplosionPrimeEvent event) {
+        if (!(event.getEntity() instanceof Creeper creeper)
+            || !runManager.isActive()
+            || !worldSetManager.isActiveWorld(creeper.getWorld())) {
+            return;
+        }
+        int attempt = statsManager.getCurrentAttempt();
+        resetForAttempt(attempt);
+        long tick = frameRecorder.currentSampleTick();
+        Location position = creeper.getLocation();
+        ReplayCreeperExplosionEvent recorded = new ReplayCreeperExplosionEvent(
+            tick, attempt, creeper.getWorld().getUID(), creeper.getUniqueId(),
+            position.getX(), position.getY(), position.getZ(), creeper.isPowered()
+        );
+        double range2 = (double) radius * radius;
+        for (Player subject : plugin.getServer().getOnlinePlayers()) {
+            if (!subject.isOnline() || subject.isDead()
+                || subject.getGameMode() != GameMode.SURVIVAL
+                || subject.getWorld() != creeper.getWorld()
+                || subject.getLocation().distanceSquared(position) > range2) {
+                continue;
+            }
+            explosionBuffers.computeIfAbsent(subject.getUniqueId(), ignored ->
+                new RollingReplayCreeperExplosionBuffer(
+                    MAX_EXPLOSIONS_PER_PLAYER, frameRecorder.windowTicks()
+                )
+            ).append(recorded);
+        }
+    }
+
     private void appendVisual(
         int attempt, long tick, Entity atEntity, UUID actorId,
         ReplayVisualEvent.Kind kind
@@ -175,6 +211,7 @@ public final class ReplayCombatRecorder implements Listener {
         if (recordedAttempt != attempt) {
             buffers.clear();
             visualBuffers.clear();
+            explosionBuffers.clear();
             recordedAttempt = attempt;
         }
     }
@@ -189,6 +226,18 @@ public final class ReplayCombatRecorder implements Listener {
         RollingReplayVisualEventBuffer buffer = visualBuffers.get(victimId);
         return buffer == null ? List.of() :
             buffer.snapshot(attempt, worldId, startTick, endTick);
+    }
+
+    /** Explosion effects for the same victim/world/time window as the keyframes. */
+    public List<ReplayCreeperExplosionEvent> snapshotExplosionsFor(
+        UUID victimId, int attempt, UUID worldId, long startTick, long endTick
+    ) {
+        if (!plugin.getServer().isPrimaryThread()) {
+            throw new IllegalStateException("Explosion snapshot requires main thread.");
+        }
+        RollingReplayCreeperExplosionBuffer buffer = explosionBuffers.get(victimId);
+        return buffer == null ? List.of()
+            : buffer.snapshot(attempt, worldId, startTick, endTick);
     }
 
     /** Read events for the victim's exact recording window. Main thread only. */
@@ -206,6 +255,7 @@ public final class ReplayCombatRecorder implements Listener {
     public void clear() {
         buffers.clear();
         visualBuffers.clear();
+        explosionBuffers.clear();
         recordedAttempt = -1;
     }
 
