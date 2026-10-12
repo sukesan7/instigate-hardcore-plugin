@@ -71,6 +71,10 @@ public final class HardcoreTabCompleter
                 "deaths"
             );
 
+            commands.add(
+                "coords"
+            );
+
             if (
                 sender.hasPermission(
                     "instigatehardcore.admin"

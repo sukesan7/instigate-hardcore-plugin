@@ -187,6 +187,11 @@ public final class HardcoreCommand
                 yield true;
             }
 
+            case "coords" -> {
+                broadcastCoordinates(sender, args);
+                yield true;
+            }
+
             case "deaths" -> {
                 sendDeaths(
                     sender
@@ -265,6 +270,52 @@ public final class HardcoreCommand
                 yield true;
             }
         };
+    }
+
+    /** Broadcast the sender's block coordinates and friendly dimension. */
+    private void broadcastCoordinates(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(InstigateTheme.chat(
+                InstigateTheme.error("Only players can broadcast their coordinates.")
+            ));
+            return;
+        }
+        if (args.length != 1) {
+            player.sendMessage(InstigateTheme.chat(
+                InstigateTheme.error("Usage: /hc coords")
+            ));
+            return;
+        }
+        if (!runManager.isActive() || !worldSetManager.isActiveWorld(player.getWorld())) {
+            player.sendMessage(InstigateTheme.chat(
+                InstigateTheme.error("Coordinates can only be shared during an active attempt.")
+            ));
+            return;
+        }
+
+        WorldSet active = worldSetManager.getActiveWorldSet();
+        String dimension = player.getWorld().equals(active.overworld()) ? "Overworld"
+            : player.getWorld().equals(active.nether()) ? "Nether"
+            : player.getWorld().equals(active.end()) ? "End"
+            : player.getWorld().getName();
+
+        var location = player.getLocation();
+        String coords = "(" + location.getBlockX() + ", "
+            + location.getBlockY() + ", " + location.getBlockZ() + ")";
+
+        Component copyable = Component.text(coords, InstigateTheme.PURPLE)
+            .hoverEvent(HoverEvent.showText(
+                InstigateTheme.secondary("Click to copy X, Y, Z")
+            ))
+            .clickEvent(ClickEvent.copyToClipboard(
+                location.getBlockX() + " " + location.getBlockY() + " " + location.getBlockZ()
+            ));
+        Bukkit.broadcast(InstigateTheme.chat(Component.text()
+            .append(Component.text(player.getName() + "'s coordinates are: ", InstigateTheme.TEXT))
+            .append(copyable)
+            .append(Component.text(" in ", InstigateTheme.SECONDARY))
+            .append(Component.text(dimension, InstigateTheme.AZURE))
+            .build()));
     }
 
     /*
@@ -2067,6 +2118,12 @@ public final class HardcoreCommand
             sender,
             "/hc stats <player>",
             "Show another player's statistics."
+        );
+
+        sendHelpEntry(
+            sender,
+            "/hc coords",
+            "Broadcast your position and dimension."
         );
 
         sendHelpEntry(

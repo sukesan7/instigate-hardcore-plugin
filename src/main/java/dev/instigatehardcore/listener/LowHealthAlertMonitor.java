@@ -2,39 +2,52 @@ package dev.instigatehardcore.listener;
 
 import dev.instigatehardcore.core.RunManager;
 import dev.instigatehardcore.ui.InstigateTheme;
+import dev.instigatehardcore.ui.HeartDisplayFormatter;
 import dev.instigatehardcore.world.WorldSetManager;
 
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.TextColor;
 
+import org.bukkit.Bukkit;
+import org.bukkit.Sound;
+import org.bukkit.SoundCategory;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
-import java.util.Locale;
+import java.math.BigDecimal;
 import java.util.Objects;
 
-/** Global, once-per-danger-episode health warning for ACTIVE participants. */
+/** Global health alerts for players in the active attempt; no replay/reset spam. */
 public final class LowHealthAlertMonitor {
+    private static final TextColor ORANGE = TextColor.color(0xF3A64D);
+
     private final JavaPlugin plugin;
     private final RunManager runManager;
     private final WorldSetManager worlds;
-    private final LowHealthAlertPolicy policy;
+    private final TieredHealthAlertPolicy policy;
+    private final boolean criticalSoundEnabled;
+    private final double warningHearts;
+    private final double criticalHearts;
     private BukkitTask task;
+    private int nextAlarmTick = Integer.MIN_VALUE;
 
-    public LowHealthAlertMonitor(
-        JavaPlugin plugin, RunManager runManager, WorldSetManager worlds,
-        double thresholdHearts, double rearmHearts
-    ) {
+    public LowHealthAlertMonitor(JavaPlugin plugin, RunManager runManager,
+                                 WorldSetManager worlds, double warningHearts,
+                                 double warningRearmHearts, double criticalHearts,
+                                 double criticalRearmHearts, boolean criticalSoundEnabled) {
         this.plugin = Objects.requireNonNull(plugin);
         this.runManager = Objects.requireNonNull(runManager);
         this.worlds = Objects.requireNonNull(worlds);
-        this.policy = new LowHealthAlertPolicy(thresholdHearts, rearmHearts);
+        this.policy = new TieredHealthAlertPolicy(
+            warningHearts, warningRearmHearts, criticalHearts, criticalRearmHearts);
+        this.criticalSoundEnabled = criticalSoundEnabled;
+        this.warningHearts = warningHearts;
+        this.criticalHearts = criticalHearts;
     }
 
     public void start() {
         if (task != null) return;
-        // Poll every 2 ticks (0.1s nominal) to catch damage, poison,
-        // commands and healing without relying on pre-damage event values.
         task = plugin.getServer().getScheduler().runTaskTimer(
             plugin, this::sample, 2L, 2L
         );
@@ -50,29 +63,49 @@ public final class LowHealthAlertMonitor {
 
     private void sample() {
         if (!runManager.isActive()) {
-            // Also reset across attempts, even if the same user was low.
             policy.clear();
             return;
         }
         for (Player player : plugin.getServer().getOnlinePlayers()) {
-            boolean eligible = player.isOnline() && !player.isDead()
-                && worlds.isActiveWorld(player.getWorld());
-            if (!eligible) continue;
+            if (!player.isOnline() || player.isDead()
+                    || !worlds.isActiveWorld(player.getWorld())) continue;
             double health = player.getHealth();
-            if (!policy.check(player.getUniqueId(), health, true)) continue;
+            TieredHealthAlertPolicy.Level level = policy.evaluate(player.getUniqueId(), health, true);
+            if (level == TieredHealthAlertPolicy.Level.NONE) continue;
 
-            double hearts = Math.floor(health * 5.0) / 10.0;
-            String healthLabel = String.format(Locale.ROOT, "%.1f", hearts);
-            plugin.getServer().broadcast(
-                InstigateTheme.chat(Component.text()
-                    .append(Component.text("⚠ ", InstigateTheme.ERROR))
-                    .append(Component.text(player.getName(), InstigateTheme.TEXT))
-                    .append(Component.text(" is below 2 hearts (", InstigateTheme.ERROR))
-                    .append(Component.text(healthLabel + " ♥", InstigateTheme.PURPLE))
-                    .append(Component.text(")!", InstigateTheme.ERROR))
-                    .build()
-                )
-            );
+            String hearts = HeartDisplayFormatter.hearts(health);
+            boolean critical = level == TieredHealthAlertPolicy.Level.CRITICAL;
+            TextColor color = critical ? InstigateTheme.ERROR : ORANGE;
+            String label = BigDecimal.valueOf(critical ? criticalHearts : warningHearts)
+                .stripTrailingZeros().toPlainString();
+            plugin.getServer().broadcast(InstigateTheme.chat(Component.text()
+                .append(Component.text("⚠ ", color))
+                .append(Component.text(player.getName(), InstigateTheme.TEXT))
+                .append(Component.text(" is below " + label + " hearts (", color))
+                .append(Component.text(hearts + " ♥", color))
+                .append(Component.text(")!", color))
+                .build()
+            ));
+            if (critical && criticalSoundEnabled) playCriticalAlarm();
         }
+    }
+
+    private void playCriticalAlarm() {
+        int tick = Bukkit.getCurrentTick();
+        if (tick < nextAlarmTick) return; // Multiple simultaneous critical alerts: one alarm.
+        nextAlarmTick = tick + 12;
+        // Play locally to each online player, independent of the victim's distance/world.
+        for (Player listener : plugin.getServer().getOnlinePlayers()) {
+            listener.playSound(listener.getLocation(), Sound.BLOCK_NOTE_BLOCK_BELL,
+                SoundCategory.MASTER, 1.0f, 0.85f);
+        }
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            // Do not leak the second alarm note into the reset or the Deathcam.
+            if (!runManager.isActive()) return;
+            for (Player listener : plugin.getServer().getOnlinePlayers()) {
+                listener.playSound(listener.getLocation(), Sound.BLOCK_NOTE_BLOCK_BELL,
+                    SoundCategory.MASTER, 1.0f, 1.25f);
+            }
+        }, 6L);
     }
 }

@@ -10,6 +10,7 @@ import dev.instigatehardcore.countdown.CountdownManager;
 
 import dev.instigatehardcore.listener.AttemptAdvancementResetListener;
 import dev.instigatehardcore.listener.LowHealthAlertMonitor;
+import dev.instigatehardcore.ui.TabHealthDisplay;
 import dev.instigatehardcore.listener.DeathListener;
 import dev.instigatehardcore.listener.PlayerJoinListener;
 import dev.instigatehardcore.listener.PlayerQuitListener;
@@ -91,6 +92,7 @@ public final class InstigateHardcore extends JavaPlugin {
     private DeathReplayPlaybackService deathReplayPlaybackService;
 
     private LowHealthAlertMonitor lowHealthAlertMonitor;
+    private TabHealthDisplay tabHealthDisplay;
 
     private BukkitTask telemetryCheckpointTask;
 
@@ -188,6 +190,10 @@ public final class InstigateHardcore extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (tabHealthDisplay != null) {
+            tabHealthDisplay.stop();
+            tabHealthDisplay = null;
+        }
         if (lowHealthAlertMonitor != null) {
             lowHealthAlertMonitor.stop();
             lowHealthAlertMonitor = null;
@@ -773,22 +779,40 @@ public final class InstigateHardcore extends JavaPlugin {
         }
 
         if (getConfig().getBoolean("alerts.low-health.enabled", true)) {
-            double threshold = getConfig().getDouble(
+            double warning = getConfig().getDouble(
+                "alerts.low-health.warning-hearts", 5.0
+            );
+            double warningRearm = getConfig().getDouble(
+                "alerts.low-health.warning-rearm-hearts", 6.0
+            );
+            // Backward-compatible with existing Phase 10B.2 configurations.
+            double critical = getConfig().getDouble(
                 "alerts.low-health.threshold-hearts", 2.0
             );
-            double rearm = getConfig().getDouble(
+            double criticalRearm = getConfig().getDouble(
                 "alerts.low-health.rearm-hearts", 3.0
             );
-            if (!(threshold > 0.0 && rearm > threshold)) {
-                getLogger().warning("Invalid low-health thresholds; using 2/3 hearts.");
-                threshold = 2.0;
-                rearm = 3.0;
+            if (!(critical > 0.0 && criticalRearm > critical &&
+                    warning > critical && warningRearm > warning)) {
+                getLogger().warning("Invalid low-health thresholds; using 5/6 and 2/3 hearts.");
+                warning = 5.0;
+                warningRearm = 6.0;
+                critical = 2.0;
+                criticalRearm = 3.0;
             }
             lowHealthAlertMonitor = new LowHealthAlertMonitor(
-                this, runManager, worldSetManager, threshold, rearm
+                this, runManager, worldSetManager,
+                warning, warningRearm, critical, criticalRearm,
+                getConfig().getBoolean("alerts.low-health.critical-sound-enabled", true)
             );
             lowHealthAlertMonitor.start();
-            getLogger().info("Global low-health alerts enabled.");
+            getLogger().info("Global two-stage health alerts enabled.");
+        }
+        if (getConfig().getBoolean("tab-health.enabled", true)) {
+            int interval = Math.max(1, getConfig().getInt("tab-health.update-interval-ticks", 10));
+            tabHealthDisplay = new TabHealthDisplay(this, interval);
+            tabHealthDisplay.start();
+            getLogger().info("Tab player-list hearts enabled.");
         }
     }
 
