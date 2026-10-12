@@ -10,7 +10,7 @@
 
 The plugin was originally created for **Instigate Cafe**, a private group of friends playing Minecraft together, but it is designed so that any group can download the `.jar`, install it on a Paper server, and run their own shared hardcore world.
 
-No client mods are required.
+No client mods or resource packs are required.
 
 ---
 
@@ -23,12 +23,15 @@ All players share the same attempt and play normally across the Overworld, Nethe
 If any participating player dies:
 
 - the current attempt immediately ends;
-- everyone is removed from active gameplay;
-- a short reset countdown begins;
+- everyone enters spectator mode;
+- a seven-second Deathcam replays the final moments of the run;
+- a three-second countdown completes the reset;
 - the next world is activated automatically;
-- player state is reset;
+- player state and advancements are reset;
 - the previous attempt is unloaded and removed;
 - a new standby world is generated in the background.
+
+If a replay is unavailable, the normal reset countdown is used instead. Administrative resets do not play a death replay.
 
 The server moves from one attempt to the next without requiring a restart.
 
@@ -45,6 +48,23 @@ A death in:
 will end the current attempt as long as it occurs inside the active hardcore world set.
 
 Player deaths, attempts played, participation, playtime, and other statistics are persisted between server restarts.
+
+## Deathcam
+
+When an attempt ends from a player death, everyone watches a **seven-second reconstruction** of the events leading up to it.
+
+The replay includes:
+
+- player and nearby entity movement;
+- player skins, armor, and held equipment;
+- attack swings, damage reactions, and critical-hit effects;
+- sprinting and landing particles;
+- creeper fuse animations, explosions, and sounds;
+- a smooth third-person tracking camera, replay timer, and cinematic HUD.
+
+The final **three seconds** are reserved for the transition into the next attempt. The standard ten-second reset is preserved when playback cannot start.
+
+Replays use temporary, client-side entities and visual effects. They do not recreate historical block placement, destruction, or terrain changes, and they do not modify the actual world during playback.
 
 ---
 
@@ -68,9 +88,12 @@ flowchart TD
     A["Attempt #N<br/>ACTIVE<br/><br/>Overworld<br/>Nether<br/>End"]
     S["Attempt #N+1<br/>STANDBY<br/><br/>Pre-generated<br/>and ready"]
 
-    D["Player Dies<br/>or Admin Reset"]
+    D["Player Dies"]
+    M["Admin Reset"]
     E["ENDING"]
-    C["Reset Countdown"]
+    V["7s Deathcam"]
+    C["3s Reset Buffer"]
+    F["Normal Reset Countdown"]
     R["RESETTING"]
     P["Promote Standby"]
     N["Attempt #N+1<br/>ACTIVE"]
@@ -79,15 +102,20 @@ flowchart TD
     G["Generate Attempt #N+2<br/>STANDBY"]
 
     A --> D
+    A --> M
     D --> E
-    E --> C
+    M --> E
+    E -->|Replay available| V
+    V --> C
     C --> R
+    E -->|Admin or replay fallback| F
+    F --> R
 
     S --> P
     R --> P
 
     P --> N
-    A --> O
+    P --> O
     O --> X
 
     N --> G
@@ -154,7 +182,7 @@ Attempt #3
 
 When a new attempt starts, every connected player is transferred into the new active world and becomes a participant in that attempt.
 
-Players who join later are added when they enter the active attempt.
+Players who join later are added when they enter the active attempt, if late joining is enabled. Returning participants can rejoin their current attempt.
 
 Participation is tracked **per attempt**.
 
@@ -222,6 +250,24 @@ is not counted as active playtime.
 
 ---
 
+# Quality of Life
+
+## Advancements
+
+Minecraft advancements are reset when a player enters a **new attempt**, allowing them to be earned again. Rejoining the same attempt or travelling between its dimensions does not reset progress.
+
+## Scoreboard
+
+The sidebar shows the current attempt, run time, and death leaderboard. Up to **11 players** can appear at once; larger historical leaderboards rotate between pages automatically rather than hiding entries behind a `+N more` row.
+
+## Low-Health Alerts
+
+When an active participant falls **below two hearts**, the server broadcasts a warning to all players. The alert is sent once per danger episode and is armed again after the player recovers to at least three hearts.
+
+Warnings are suspended while an attempt is ending or resetting.
+
+---
+
 # Commands
 
 The primary command is:
@@ -258,6 +304,12 @@ with the shorter alias:
 
 Administrative resets do **not** count as player deaths.
 
+## Replay Testing
+
+The operator-only `/hcreplaytest <player> [pov|cinematic]` command previews a player's recent recording without ending the attempt. It requires an enabled debug preview, an operator in Spectator mode, and a Survival player within 48 blocks in the same dimension.
+
+Disable `death-replay.debug-preview-enabled` on production servers.
+
 ---
 
 # Gallery
@@ -291,16 +343,17 @@ Administrative resets do **not** count as player deaths.
 Instigate Hardcore currently targets:
 
 - **Minecraft 26.3**
-- **Paper**
+- **Paper 26.3**
 - **Java 25**
+- **PacketEvents 2.14.0** for Deathcam playback
 
 Other versions are not guaranteed to work unless explicitly supported by a release.
 
 ## Install
 
-1. Download the latest `InstigateHardcore.jar`.
+1. Download the latest `InstigateHardcore-<version>.jar` from [Releases](https://github.com/sukesan7/instigate-hardcore-plugin/releases).
 
-2. Place it inside your Paper server's:
+2. Place it and the compatible **PacketEvents** plugin `.jar` inside your Paper server's:
 
 ```text
 plugins/
@@ -318,6 +371,8 @@ plugins/InstigateHardcore/config.yml
 
 6. Start the server again.
 
+PacketEvents is loaded as a separate server plugin. Without it, core hardcore gameplay and world rotation still work, but the rendered Deathcam is unavailable.
+
 No client-side installation is required.
 
 Players can connect using vanilla Minecraft or compatible clients such as Lunar Client.
@@ -332,9 +387,41 @@ The plugin provides configuration for features such as:
 reset:
   countdown-seconds: 10
 
+players:
+  allow-late-joiners: true
+
 scoreboard:
   enabled: true
   update-interval-ticks: 20
+  page-interval-seconds: 10
+
+alerts:
+  low-health:
+    enabled: true
+    threshold-hearts: 2.0
+    rearm-hearts: 3.0
+
+death-replay:
+  enabled: true
+  automatic-playback-enabled: true
+  debug-preview-enabled: false
+  duration-seconds: 7
+  capture-interval-ticks: 2
+  capture-radius-blocks: 24
+  max-actors-per-frame: 48
+  visuals:
+    movement-particles: true
+    max-particles-per-tick: 24
+  cinematic:
+    enabled: true
+    hide-scoreboard: true
+  camera:
+    tracking-enabled: true
+    collision-check: true
+    follow-distance: 4.5
+    height: 2.2
+    shoulder-offset: 0.8
+    smoothing: 0.25
 
 worlds:
   lobby-world: world
@@ -345,6 +432,8 @@ debug:
 ```
 
 The configured lobby world acts as a permanent safety world and is **not** part of the rotating hardcore attempts.
+
+The configuration above is a production-oriented example; debug replay previews are disabled. The ten-second countdown covers the seven-second replay and three-second transition, and also serves as the normal fallback countdown.
 
 ---
 
@@ -411,6 +500,8 @@ world-state.properties
 
 A normal Paper restart does not erase player statistics or attempt history.
 
+The advancement-reset marker is stored with each player's persistent data so reconnecting to the same attempt does not revoke their advancements again.
+
 ---
 
 # Permissions
@@ -419,7 +510,7 @@ A normal Paper restart does not erase player statistics or attempt history.
 | --- | --- | --- |
 | `instigatehardcore.command` | Everyone | Access normal hardcore commands |
 | `instigatehardcore.admin` | Operators | Administrative controls |
-| `instigatehardcore.debug` | Operators | Diagnostic information |
+| `instigatehardcore.debug` | Operators | Diagnostics and optional replay previews |
 
 ---
 
