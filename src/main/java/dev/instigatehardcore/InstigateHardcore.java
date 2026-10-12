@@ -21,6 +21,7 @@ import dev.instigatehardcore.player.PlayerResetManager;
 
 import dev.instigatehardcore.replay.DeathReplayCaptureService;
 import dev.instigatehardcore.replay.DeathReplayRecorder;
+import dev.instigatehardcore.replay.ReplayBlockRecorder;
 import dev.instigatehardcore.replay.ReplayCombatRecorder;
 import dev.instigatehardcore.replay.ReplayDebugPreviewCommand;
 import dev.instigatehardcore.replay.DeathReplayPlaybackService;
@@ -84,6 +85,7 @@ public final class InstigateHardcore extends JavaPlugin {
     // Phase 9A–9D: recording and optional in-game developer preview.
     private DeathReplayRecorder deathReplayRecorder;
     private ReplayCombatRecorder replayCombatRecorder;
+    private ReplayBlockRecorder replayBlockRecorder;
     private DeathReplayCaptureService deathReplayCaptureService;
     private ReplayDebugPreviewCommand replayDebugPreviewCommand;
     private DeathReplayPlaybackService deathReplayPlaybackService;
@@ -201,6 +203,11 @@ public final class InstigateHardcore extends JavaPlugin {
         if (replayDebugPreviewCommand != null) {
             replayDebugPreviewCommand.close();
             replayDebugPreviewCommand = null;
+        }
+
+        if (replayBlockRecorder != null) {
+            replayBlockRecorder.stop();
+            replayBlockRecorder = null;
         }
 
         if (deathReplayCaptureService != null) {
@@ -727,6 +734,22 @@ public final class InstigateHardcore extends JavaPlugin {
             replayCombatRecorder
         );
 
+        // Phase 10: block changes are optional and never modify the world.
+        if (getConfig().getBoolean("death-replay.terrain.enabled", false)) {
+            replayBlockRecorder = new ReplayBlockRecorder(
+                this, runManager, statsManager, worldSetManager, deathReplayRecorder,
+                getConfig().getInt("death-replay.terrain.capture-radius-blocks", 24),
+                getConfig().getInt("death-replay.terrain.max-changes-per-clip", 1024),
+                getConfig().getBoolean("death-replay.terrain.environment.enabled", true),
+                getConfig().getInt("death-replay.terrain.environment.max-watched-blocks", 512),
+                getConfig().getInt("death-replay.terrain.environment.max-reads-per-tick", 128)
+            );
+            getServer().getPluginManager().registerEvents(replayBlockRecorder, this);
+            replayBlockRecorder.start();
+            deathReplayCaptureService.setBlockRecorder(replayBlockRecorder);
+            getLogger().info("Phase 10 terrain change recorder enabled.");
+        }
+
         // Requires the Phase 9B setter in AttemptEndManager.java.
         attemptEndManager.setDeathReplayCaptureService(
             deathReplayCaptureService
@@ -974,6 +997,9 @@ public final class InstigateHardcore extends JavaPlugin {
             replayCombatRecorder
         );
 
+        if (replayBlockRecorder != null) {
+            replayDebugPreviewCommand.setBlockRecorder(replayBlockRecorder);
+        }
         command.setExecutor(replayDebugPreviewCommand);
         getServer().getPluginManager().registerEvents(
             replayDebugPreviewCommand,

@@ -18,6 +18,7 @@ import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.ExplosionPrimeEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
+import org.bukkit.event.player.PlayerItemConsumeEvent;
 import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -149,6 +150,29 @@ public final class ReplayCombatRecorder implements Listener {
         }
         appendVisual(attempt, frameRecorder.currentSampleTick(), player,
             player.getUniqueId(), kind);
+    }
+
+    /**
+     * The server fires this once at the END of a successful consumption.
+     * Reconstruct a handful of consumption sounds in the preceding 1.2s,
+     * rather than reporting an unconfirmed right click as eating. This is
+     * only an approximation of the client's exact bite audio cadence.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onConsume(PlayerItemConsumeEvent event) {
+        Player player = event.getPlayer();
+        if (!runManager.isActive() || player.isDead()
+            || player.getGameMode() != GameMode.SURVIVAL
+            || !worldSetManager.isActiveWorld(player.getWorld())) return;
+        int attempt = statsManager.getCurrentAttempt();
+        resetForAttempt(attempt);
+        ReplayVisualEvent.Kind kind = ReplayConsumptionAudio.kindFor(
+            event.getItem().getType().name(), event.getItem().getType().isEdible());
+        if (kind == null) return; // Unsupported consumable: no invented sound.
+        long finishTick = frameRecorder.currentSampleTick();
+        for (long tick : ReplayConsumptionAudio.biteTicks(finishTick)) {
+            appendVisual(attempt, tick, player, player.getUniqueId(), kind);
+        }
     }
 
     /** Observe only real, non-cancelled creeper explosions. Never cause an explosion. */

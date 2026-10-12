@@ -44,6 +44,20 @@ death-replay:
     shoulder-offset: 0.8
     smoothing: 0.25
 
+  terrain:
+    enabled: true
+    capture-radius-blocks: 24
+    max-changes-per-clip: 1024
+    max-block-packets-per-tick: 128
+
+    environment:
+      enabled: true
+      max-watched-blocks: 512
+      max-reads-per-tick: 128
+
+    audio:
+      enabled: true
+
 worlds:
   # Permanent safety/fallback world.
   # This should match the normal Paper level-name.

@@ -9,6 +9,7 @@ import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -22,6 +23,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 
 /**
@@ -63,7 +65,19 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
         int durationTicks,
         BiConsumer<Boolean, Integer> onFinish
     ) {
+        return play(frozen, deathLocation, durationTicks,
+            frozen::blockChanges, onFinish);
+    }
+
+    public boolean play(
+        FrozenDeathReplay frozen,
+        Location deathLocation,
+        int durationTicks,
+        Supplier<List<ReplayBlockChange>> finalizedTerrain,
+        BiConsumer<Boolean, Integer> onFinish
+    ) {
         assertMainThread();
+        Objects.requireNonNull(finalizedTerrain);
         Objects.requireNonNull(frozen);
         Objects.requireNonNull(deathLocation);
         Objects.requireNonNull(onFinish);
@@ -104,7 +118,8 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
         }
 
         Session session = new Session(scene, frozen.clip(), frozen.visualEvents(),
-            frozen.creeperExplosions(), deathLocation.clone(), onFinish);
+            frozen.creeperExplosions(), frozen.blockChanges(), finalizedTerrain,
+            deathLocation.clone(), onFinish);
         active = session;
         try {
             stopDeveloperPreviews.run();
@@ -129,6 +144,8 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
         final ReplayClip clip;
         final List<ReplayVisualEvent> visualEvents;
         final List<ReplayCreeperExplosionEvent> explosions;
+        List<ReplayBlockChange> blocks;
+        final Supplier<List<ReplayBlockChange>> finalizedTerrain;
         final Location deathLocation;
         final BiConsumer<Boolean, Integer> callback;
         // Precomputed once, not scanned for every viewer joining a replay.
@@ -144,6 +161,8 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
             ReplayClip clip,
             List<ReplayVisualEvent> visualEvents,
             List<ReplayCreeperExplosionEvent> explosions,
+            List<ReplayBlockChange> blocks,
+            Supplier<List<ReplayBlockChange>> finalizedTerrain,
             Location deathLocation,
             BiConsumer<Boolean, Integer> callback
         ) {
@@ -151,6 +170,8 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
             this.clip = clip;
             this.visualEvents = List.copyOf(visualEvents);
             this.explosions = List.copyOf(explosions);
+            this.blocks = List.copyOf(blocks);
+            this.finalizedTerrain = Objects.requireNonNull(finalizedTerrain);
             this.deathLocation = deathLocation;
             this.callback = callback;
             this.recordedActorIds = ReplayViewerActorIndex.fromClip(clip);
@@ -161,6 +182,22 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                 return;
             }
             try {
+                // Called after the 4-tick death/respawn settle window. Fatal
+                // explosions sometimes report destroyed blocks after the
+                // death event originally froze the clip.
+                try {
+                    int frozenCount = blocks.size();
+                    blocks = List.copyOf(finalizedTerrain.get());
+                    if (blocks.size() > frozenCount) {
+                        plugin.getLogger().info("Recovered "
+                            + (blocks.size() - frozenCount)
+                            + " late death-tick terrain changes for replay.");
+                    }
+                } catch (RuntimeException terrainError) {
+                    plugin.getLogger().log(Level.WARNING,
+                        "Unable to finalize terrain history; using death-time snapshot.",
+                        terrainError);
+                }
                 for (Player player : List.copyOf(Bukkit.getOnlinePlayers())) {
                     if (!player.isOnline() || player.isDead()
                         || player.getGameMode() != GameMode.SPECTATOR) {
@@ -226,6 +263,18 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                 for (var iterator = viewers.entrySet().iterator(); iterator.hasNext();) {
                     Viewer viewer = iterator.next().getValue();
                     try {
+                        if (viewer.terrain != null && !viewer.terrainFailed) {
+                            try {
+                                viewer.terrain.renderTick(tick);
+                            } catch (RuntimeException terrainError) {
+                                viewer.terrainFailed = true;
+                                plugin.getLogger().log(Level.WARNING,
+                                    "Terrain replay failed; continuing entity Deathcam.",
+                                    terrainError);
+                                try { viewer.terrain.close(); }
+                                catch (RuntimeException ignored) { }
+                            }
+                        }
                         viewer.playback.renderTick(tick);
                         if (viewer.cinematic != null) {
                             viewer.cinematic.renderTick(tick);
@@ -326,8 +375,10 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
             final List<Entity> hiddenActors = new ArrayList<>();
             final ReplayPacketActorTransport transport;
             final ReplayActorPlayback playback;
+            final ReplayTerrainOverlay terrain;
             final ReplayCinematicView cinematic;
             boolean closed;
+            boolean terrainFailed;
 
             Viewer(Player player) {
                 this.player = player;
@@ -357,6 +408,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                 // a failed setup must not strand invisible live entities.
                 ReplayPacketActorTransport newTransport = null;
                 ReplayCinematicView newCinematic = null;
+                ReplayTerrainOverlay newTerrain = null;
                 try {
                     for (UUID actorId : recordedActorIds) {
                         Entity live = Bukkit.getEntity(actorId);
@@ -366,7 +418,22 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                             hiddenActors.add(live);
                         }
                     }
-                    newTransport = new ReplayPacketActorTransport(player, scene.worldId());
+                    // Death-time item drops may not exist in the pre-death clip.
+                    // Hide real dropped items while the ghost world plays, then
+                    // reveal them on cleanup. Never remove them server-side.
+                    int hideRadius = Math.max(1, Math.min(64,
+                        plugin.getConfig().getInt("death-replay.capture-radius-blocks", 24)));
+                    for (Location center : List.of(nearStart, deathLocation)) {
+                        for (Entity nearby : center.getWorld().getNearbyEntities(
+                                center, hideRadius, hideRadius, hideRadius)) {
+                            if (nearby instanceof Item && !hiddenActors.contains(nearby)) {
+                                player.hideEntity(plugin, nearby);
+                                hiddenActors.add(nearby);
+                            }
+                        }
+                    }
+                    newTransport = new ReplayPacketActorTransport(player, scene.worldId(),
+                        plugin.getConfig().getBoolean("death-replay.audio.enabled", true));
                     this.playback = new ReplayActorPlayback(
                         scene, newTransport, visualEvents, explosions,
                         plugin.getConfig().getBoolean("death-replay.visuals.movement-particles", true),
@@ -375,11 +442,21 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                             ReplayEffectBudget.DEFAULT_PARTICLES_PER_TICK))
                     );
                     this.transport = newTransport;
+                    if (!blocks.isEmpty() && plugin.getConfig().getBoolean(
+                        "death-replay.terrain.enabled", false)) {
+                        newTerrain = new ReplayTerrainOverlay(
+                            player, scene, blocks, plugin.getConfig().getInt(
+                                "death-replay.terrain.max-block-packets-per-tick", 128));
+                    }
+                    this.terrain = newTerrain;
                     if (plugin.getConfig().getBoolean("death-replay.cinematic.enabled", true)) {
                         newCinematic = new ReplayCinematicView(plugin, player, scene, true);
                     }
                     this.cinematic = newCinematic;
                 } catch (RuntimeException exception) {
+                    if (newTerrain != null) {
+                        try { newTerrain.close(); } catch (RuntimeException ignored) { }
+                    }
                     if (newCinematic != null) {
                         try { newCinematic.close(); } catch (RuntimeException ignored) { }
                     }
@@ -415,6 +492,14 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                         plugin.getLogger().log(
                             Level.WARNING, "Could not fully clear deathcam HUD.", exception
                         );
+                    }
+                }
+                if (terrain != null) {
+                    try {
+                        terrain.close();
+                    } catch (RuntimeException exception) {
+                        plugin.getLogger().log(Level.WARNING,
+                            "Could not fully restore terrain overrides for spectator.", exception);
                     }
                 }
                 try {

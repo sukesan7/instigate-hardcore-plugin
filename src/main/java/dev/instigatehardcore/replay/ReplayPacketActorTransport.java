@@ -6,6 +6,7 @@ import com.github.retrooper.packetevents.protocol.component.builtin.item.ItemSwi
 import com.github.retrooper.packetevents.protocol.player.InteractionHand;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityDataTypes;
+import com.github.retrooper.packetevents.protocol.entity.pose.EntityPose;
 import com.github.retrooper.packetevents.protocol.entity.type.EntityType;
 import com.github.retrooper.packetevents.protocol.vector.vecdelta.LinearVecDelta;
 import com.github.retrooper.packetevents.protocol.entity.type.EntityTypes;
@@ -36,6 +37,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
+import org.bukkit.SoundCategory;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
@@ -75,8 +77,14 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
     private final Set<UUID> detonatedCreepers = new HashSet<>();
     private int cameraTargetId = -1;
     private boolean closed;
+    private final boolean soundEnabled;
 
     public ReplayPacketActorTransport(Player viewer, UUID replayWorldId) {
+        this(viewer, replayWorldId, true);
+    }
+
+    public ReplayPacketActorTransport(Player viewer, UUID replayWorldId, boolean soundEnabled) {
+        this.soundEnabled = soundEnabled;
         this.viewer = Objects.requireNonNull(viewer);
         this.replayWorldId = Objects.requireNonNull(replayWorldId);
         assertMainThread();
@@ -120,6 +128,7 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
             || !viewer.getWorld().getUID().equals(replayWorldId)) {
             return;
         }
+        int soundsPlayed = 0;
         for (ReplayVisualEvent event : Objects.requireNonNull(events)) {
             if (!event.worldId().equals(replayWorldId)) {
                 continue;
@@ -137,14 +146,54 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
                     ghost.entityId(), InteractionHand.OFF_HAND,
                     new ItemSwingAnimation(ItemSwingAnimation.Type.WHACK, 6)
                 ));
-                case HURT -> send(new WrapperPlayServerHurtAnimation(
-                    ghost.entityId(), ghost.lastPose().yaw()
-                ));
+                case HURT -> {
+                    send(new WrapperPlayServerHurtAnimation(
+                        ghost.entityId(), ghost.lastPose().yaw()
+                    ));
+                    if (soundEnabled && soundsPlayed++ < 16) {
+                        soundAt(ghost.lastPose(), ghost.player()
+                            ? Sound.ENTITY_PLAYER_HURT : Sound.ENTITY_GENERIC_HURT,
+                            0.9f, 1.0f);
+                    }
+                }
+                case EAT_BITE -> {
+                    if (soundEnabled && soundsPlayed++ < 16) soundAt(ghost.lastPose(),
+                        Sound.ENTITY_GENERIC_EAT, 0.65f, 0.95f);
+                }
+                case DRINK_SIP -> {
+                    if (soundEnabled && soundsPlayed++ < 16) soundAt(ghost.lastPose(),
+                        Sound.ENTITY_GENERIC_DRINK, 0.65f, 1.0f);
+                }
                 case CRITICAL -> send(new WrapperPlayServerEntityAnimation(
                     ghost.entityId(),
                     WrapperPlayServerEntityAnimation.EntityAnimationType.CRITICAL_HIT
                 ));
             }
+        }
+    }
+
+    /** Reconstructed steps for moving player ghosts only; capped by the planner. */
+    @Override
+    public void playFootsteps(List<ReplayActorPose> steps) {
+        if (!soundEnabled || closed || !viewer.isOnline()
+            || !viewer.getWorld().getUID().equals(replayWorldId)) return;
+        for (ReplayActorPose pose : steps) {
+            if (!ghosts.containsKey(pose.id())) continue;
+            Sound step = ReplayStepSound.material(pose.groundMaterial());
+            if (step != null) soundAt(pose, step, pose.sneaking() ? 0.22f : 0.44f,
+                pose.sprinting() ? 1.08f : 1.0f);
+        }
+    }
+
+    private void soundAt(ReplayActorPose pose, Sound sound, float volume, float pitch) {
+        // Audio originates from the recorded scene, not live entities; never
+        // world.playSound(), which would broadcast to actual world players.
+        try {
+            viewer.playSound(new org.bukkit.Location(viewer.getWorld(),
+                pose.x(), pose.y() + 0.7, pose.z()), sound,
+                SoundCategory.PLAYERS, volume, pitch);
+        } catch (RuntimeException ignored) {
+            // Sound is cosmetic: never cancel a death replay over bad audio.
         }
     }
 
@@ -174,10 +223,15 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
                     18, 0.55, 0.55, 0.55, 0.08
                 );
             }
-            viewer.playSound(
-                new org.bukkit.Location(viewer.getWorld(), x, y, z),
-                Sound.ENTITY_GENERIC_EXPLODE, 1.0f, event.powered() ? 0.8f : 1.0f
-            );
+            if (soundEnabled) {
+                try {
+                    viewer.playSound(new org.bukkit.Location(viewer.getWorld(), x, y, z),
+                        Sound.ENTITY_GENERIC_EXPLODE, SoundCategory.BLOCKS,
+                        1.4f, event.powered() ? 0.8f : 1.0f);
+                } catch (RuntimeException ignored) {
+                    // Preserve the replay even if the sound registry changes.
+                }
+            }
         }
     }
 
@@ -288,7 +342,9 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
         ));
         send(new WrapperPlayServerEntityHeadLook(entityId, pose.yaw()));
         sendMetadata(entityId, pose);
-        sendEquipment(entityId, pose.equipment());
+        if (!isDroppedItem(pose)) {
+            sendEquipment(entityId, pose.equipment());
+        }
         if (isCreeper(pose) && pose.creeperState().swelling()) {
             playCreeperPrime(pose);
         }
@@ -357,7 +413,11 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
             playCreeperPrime(pose);
         }
         if (!ghost.lastPose().equipment().equals(pose.equipment())) {
-            sendEquipment(ghost.entityId(), pose.equipment());
+            if (isDroppedItem(pose)) {
+                sendMetadata(ghost.entityId(), pose);
+            } else {
+                sendEquipment(ghost.entityId(), pose.equipment());
+            }
         }
         ghosts.put(pose.id(), new Ghost(ghost.entityId(), ghost.profileId(), ghost.player(), pose, sentX, sentY, sentZ));
     }
@@ -371,6 +431,23 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
 
         List<EntityData<?>> metadata = new ArrayList<>(2);
         metadata.add(new EntityData<>(0, EntityDataTypes.BYTE, (byte) flags));
+
+        // Item entities require stack metadata; without it the client
+        // renders an empty/invisible item entity. Index 8 is the item stack
+        // value on the item entity (not equipment metadata).
+        if (isDroppedItem(pose)) {
+            metadata.add(new EntityData<>(8, EntityDataTypes.ITEMSTACK,
+                item(pose.equipment().mainHand())));
+        }
+
+        // Shared entity POSE is metadata index 6. The flags byte above does
+        // not by itself make a fake PLAYER bend its knees on modern clients.
+        // This also makes the initial pose correct for actors already sneaking
+        // at the beginning of the clip. Never send a PLAYER-only pose to items.
+        if (ReplayPlayerSkinLayers.isPlayer(pose.entityType())) {
+            metadata.add(new EntityData<>(6, EntityDataTypes.ENTITY_POSE,
+                ReplayGhostPose.of(pose.sneaking(), pose.gliding())));
+        }
 
         // Minecraft 26.3: Avatar skin customisation is metadata index 16.
         // The default for a newly spawned fake PLAYER is 0 (inner skin only).
@@ -399,15 +476,16 @@ public final class ReplayPacketActorTransport implements ReplayActorTransport {
         send(new WrapperPlayServerEntityMetadata(id, metadata));
     }
 
+    private static boolean isDroppedItem(ReplayActorPose pose) {
+        return ReplayDroppedItemState.isDroppedItem(pose.entityType());
+    }
+
     private static boolean isCreeper(ReplayActorPose pose) {
         return "CREEPER".equalsIgnoreCase(pose.entityType());
     }
 
     private void playCreeperPrime(ReplayActorPose pose) {
-        viewer.playSound(
-            new org.bukkit.Location(viewer.getWorld(), pose.x(), pose.y(), pose.z()),
-            Sound.ENTITY_CREEPER_PRIMED, 0.75f, 1.0f
-        );
+        if (soundEnabled) soundAt(pose, Sound.ENTITY_CREEPER_PRIMED, 1.0f, 1.0f);
     }
 
     private void sendEquipment(int id, ReplayEquipment equipment) {

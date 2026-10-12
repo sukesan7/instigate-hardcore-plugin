@@ -419,6 +419,9 @@ public final class AttemptEndManager {
                         replay,
                         deathLocation,
                         replayTiming.replayTicks(),
+                        () -> replayCaptureService == null
+                            ? replay.blockChanges()
+                            : replayCaptureService.finalizedTerrain(replay),
                         (completed, playbackTicksElapsed) -> {
                             if (!runManager.isEnding()
                                 || statsManager.getCurrentAttempt() != attempt) {

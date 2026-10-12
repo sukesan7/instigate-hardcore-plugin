@@ -12,13 +12,14 @@ public record FrozenDeathReplay(
     ReplayDeathMoment death,
     List<ReplayCombatEvent> combatEvents,
     List<ReplayVisualEvent> visualEvents,
-    List<ReplayCreeperExplosionEvent> creeperExplosions
+    List<ReplayCreeperExplosionEvent> creeperExplosions,
+    List<ReplayBlockChange> blockChanges
 ) {
     /** Keep existing 9B/9C tests and callers source-compatible. */
     public FrozenDeathReplay(
         ReplayClip clip, ReplayDeathMoment death, List<ReplayCombatEvent> combatEvents
     ) {
-        this(clip, death, combatEvents, List.of(), List.of());
+        this(clip, death, combatEvents, List.of(), List.of(), List.of());
     }
 
     /** Source-compatible Phase 9F.2 constructor. */
@@ -26,7 +27,16 @@ public record FrozenDeathReplay(
         ReplayClip clip, ReplayDeathMoment death,
         List<ReplayCombatEvent> combatEvents, List<ReplayVisualEvent> visualEvents
     ) {
-        this(clip, death, combatEvents, visualEvents, List.of());
+        this(clip, death, combatEvents, visualEvents, List.of(), List.of());
+    }
+
+    /** Existing 9F.3b callers and tests remain source-compatible. */
+    public FrozenDeathReplay(
+        ReplayClip clip, ReplayDeathMoment death,
+        List<ReplayCombatEvent> combatEvents, List<ReplayVisualEvent> visualEvents,
+        List<ReplayCreeperExplosionEvent> creeperExplosions
+    ) {
+        this(clip, death, combatEvents, visualEvents, creeperExplosions, List.of());
     }
 
     public FrozenDeathReplay {
@@ -35,6 +45,7 @@ public record FrozenDeathReplay(
         combatEvents = List.copyOf(Objects.requireNonNull(combatEvents));
         visualEvents = List.copyOf(Objects.requireNonNull(visualEvents));
         creeperExplosions = List.copyOf(Objects.requireNonNull(creeperExplosions));
+        blockChanges = List.copyOf(Objects.requireNonNull(blockChanges));
 
         if (clip.attempt() != death.attempt()
             || !clip.victimId().equals(death.victimId())
@@ -56,6 +67,13 @@ public record FrozenDeathReplay(
                 || !event.worldId().equals(clip.worldId())
                 || event.tick() < startTick || event.tick() > death.tick()) {
                 throw new IllegalArgumentException("Creeper explosion lies outside clip timeline.");
+            }
+        }
+        for (ReplayBlockChange change : blockChanges) {
+            if (change.attempt() != clip.attempt()
+                || !change.worldId().equals(clip.worldId())
+                || change.tick() < startTick || change.tick() > death.tick()) {
+                throw new IllegalArgumentException("Block change lies outside clip timeline.");
             }
         }
         for (ReplayVisualEvent event : visualEvents) {

@@ -10,6 +10,7 @@ import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Creeper;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.inventory.EntityEquipment;
@@ -188,7 +189,8 @@ public final class DeathReplayRecorder {
 
         List<Entity> nearby = subject.getNearbyEntities(radius, radius, radius);
         nearby.stream()
-            .filter(entity -> entity instanceof LivingEntity || entity instanceof Projectile)
+            .filter(entity -> entity instanceof LivingEntity
+                || entity instanceof Projectile || entity instanceof Item)
             .filter(entity -> !entity.isDead())
             .filter(entity -> !(entity instanceof Player other
                 && other.getGameMode() != GameMode.SURVIVAL))
@@ -218,7 +220,12 @@ public final class DeathReplayRecorder {
         Player player = entity instanceof Player p ? p : null;
         EntityEquipment equipment = living == null ? null : living.getEquipment();
 
-        ReplayEquipment visualEquipment = equipment == null
+        // A dropped ITEM does not wear equipment. Reuse the main-hand visual
+        // material slot to retain its displayed stack's material in each frame.
+        // This keeps earlier replay frame records and constructors compatible.
+        ReplayEquipment visualEquipment = entity instanceof Item dropped
+            ? ReplayDroppedItemState.withMaterial(materialName(dropped.getItemStack()))
+            : equipment == null
             ? ReplayEquipment.empty()
             : new ReplayEquipment(
                 materialName(equipment.getItemInMainHand()),
@@ -257,7 +264,11 @@ public final class DeathReplayRecorder {
             location.getYaw(), location.getPitch(),
             player != null && player.isSneaking(),
             living != null && living.isGliding(),
-            entity.getFireTicks() > 0,
+            ReplayFireVisualState.isBurning(
+                entity.getFireTicks() > 0,
+                location.getBlock().getType().name(),
+                location.clone().add(0.0, 1.0, 0.0).getBlock().getType().name()
+            ),
             living != null ? living.getHealth() : -1.0,
             visualEquipment,
             player != null && player.isSprinting(),

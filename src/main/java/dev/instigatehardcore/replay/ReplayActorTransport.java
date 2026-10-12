@@ -15,6 +15,9 @@ public interface ReplayActorTransport extends AutoCloseable {
     /** Optional client-side animations, emitted after actor spawn/update. */
     default void playVisualEvents(List<ReplayVisualEvent> events) { }
 
+    /** Optional 10B.2 reconstructed step sounds for packet-only player ghosts. */
+    default void playFootsteps(List<ReplayActorPose> steps) { }
+
     /** Optional 9F.3 viewer-only footstep/landing particles. */
     default void playMovementEffects(List<ReplayMovementEffect> effects) { }
 

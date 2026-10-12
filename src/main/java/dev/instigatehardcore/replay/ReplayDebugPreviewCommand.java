@@ -8,6 +8,7 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Item;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -34,6 +35,11 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
     private final JavaPlugin plugin;
     private final DeathReplayRecorder recorder;
     private final ReplayCombatRecorder combatRecorder;
+    private ReplayBlockRecorder blockRecorder;
+
+    public void setBlockRecorder(ReplayBlockRecorder recorder) {
+        this.blockRecorder = Objects.requireNonNull(recorder);
+    }
     private final Map<UUID, Preview> active = new HashMap<>();
 
     private final class Preview implements AutoCloseable {
@@ -41,6 +47,7 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
         final UUID worldId;
         final ReplayPacketActorTransport transport;
         final ReplayActorPlayback playback;
+        final ReplayTerrainOverlay terrain;
         final ReplayActorScene scene;
         final ReplayClip clip;
         final boolean pov;
@@ -52,11 +59,13 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
         int tick;
         boolean focused;
         boolean closed;
+        boolean terrainFailed;
 
         Preview(
             Player viewer, ReplayActorScene scene, ReplayClip clip,
             boolean pov, boolean cinematicMode, List<ReplayVisualEvent> events,
-            List<ReplayCreeperExplosionEvent> explosions
+            List<ReplayCreeperExplosionEvent> explosions,
+            List<ReplayBlockChange> blockChanges
         ) {
             this.viewer = viewer;
             this.worldId = scene.worldId();
@@ -65,7 +74,11 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             this.pov = pov;
             this.cinematicMode = cinematicMode;
             this.victimId = scene.death().victimId();
-            this.transport = new ReplayPacketActorTransport(viewer, scene.worldId());
+            this.transport = new ReplayPacketActorTransport(viewer, scene.worldId(),
+                plugin.getConfig().getBoolean("death-replay.audio.enabled", true));
+            this.terrain = blockChanges.isEmpty() ? null : new ReplayTerrainOverlay(
+                viewer, scene, blockChanges, plugin.getConfig().getInt(
+                    "death-replay.terrain.max-block-packets-per-tick", 128));
             this.playback = new ReplayActorPlayback(
                 scene, transport, events, explosions,
                 plugin.getConfig().getBoolean("death-replay.visuals.movement-particles", true),
@@ -85,6 +98,24 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
                     hiddenLiveActors.add(live);
                 }
             }
+            // Hide current dropped items even when they were spawned after the
+            // clip's last frame. Otherwise they appear before their replay time.
+            ReplayActorPose first = scene.at(0).get(victimId);
+            ReplayActorPose last = scene.at(scene.durationTicks()).get(victimId);
+            int hideRadius = Math.max(1, Math.min(64,
+                plugin.getConfig().getInt("death-replay.capture-radius-blocks", 24)));
+            for (ReplayActorPose pose : new ReplayActorPose[]{first, last}) {
+                if (pose == null) continue;
+                org.bukkit.Location center = new org.bukkit.Location(viewer.getWorld(),
+                    pose.x(), pose.y(), pose.z());
+                for (Entity nearby : viewer.getWorld().getNearbyEntities(
+                        center, hideRadius, hideRadius, hideRadius)) {
+                    if (nearby instanceof Item && !hiddenLiveActors.contains(nearby)) {
+                        viewer.hideEntity(plugin, nearby);
+                        hiddenLiveActors.add(nearby);
+                    }
+                }
+            }
             if (cinematicMode) {
                 cinematic = new ReplayCinematicView(plugin, viewer, scene, true);
             }
@@ -98,6 +129,15 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
                     return;
                 }
                 try {
+                    if (terrain != null && !terrainFailed) {
+                        try { terrain.renderTick(tick); }
+                        catch (RuntimeException terrainError) {
+                            terrainFailed = true;
+                            plugin.getLogger().log(Level.WARNING,
+                                "Terrain preview failed; continuing actor replay.", terrainError);
+                            try { terrain.close(); } catch (RuntimeException ignored) { }
+                        }
+                    }
                     playback.renderTick(tick);
                     if (cinematic != null) {
                         cinematic.renderTick(tick);
@@ -129,6 +169,13 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
                     plugin.getLogger().log(Level.WARNING, "Replay preview HUD cleanup failed.", exception);
                 }
                 cinematic = null;
+            }
+            if (terrain != null) {
+                try { terrain.close(); }
+                catch (RuntimeException exception) {
+                    plugin.getLogger().log(Level.WARNING,
+                        "Could not restore terrain preview overlay.", exception);
+                }
             }
             try {
                 playback.close();
@@ -224,8 +271,11 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             subject.getUniqueId(), clip.attempt(), clip.worldId(),
             clip.frames().getFirst().tick(), terminal.tick()
         );
+        List<ReplayBlockChange> blockChanges = blockRecorder == null
+            ? List.of() : blockRecorder.snapshotFor(clip);
         ReplayActorScene scene = new ReplayActorScene(
-            new FrozenDeathReplay(clip, terminal, List.of(), visualEvents, explosions)
+            new FrozenDeathReplay(
+                clip, terminal, List.of(), visualEvents, explosions, blockChanges)
         );
         boolean pov = args.length == 2 && args[1].equalsIgnoreCase("pov");
         boolean cinematicMode = args.length == 2 && args[1].equalsIgnoreCase("cinematic");
@@ -236,7 +286,7 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
         finish(viewer.getUniqueId());
         try {
             Preview preview = new Preview(viewer, scene, clip, pov, cinematicMode,
-                visualEvents, explosions);
+                visualEvents, explosions, blockChanges);
             active.put(viewer.getUniqueId(), preview);
             preview.start();
             viewer.sendMessage("Replaying recorded actors for 7 seconds (test only; no death/reset)."

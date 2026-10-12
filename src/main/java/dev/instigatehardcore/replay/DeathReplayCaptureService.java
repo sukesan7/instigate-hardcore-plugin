@@ -20,6 +20,11 @@ public final class DeathReplayCaptureService {
     private final DeathReplayRecorder frameRecorder;
     private final ReplayCombatRecorder combatRecorder;
     private FrozenDeathReplay lastFrozen;
+    private ReplayBlockRecorder blockRecorder;
+
+    public void setBlockRecorder(ReplayBlockRecorder recorder) {
+        this.blockRecorder = Objects.requireNonNull(recorder);
+    }
 
     public DeathReplayCaptureService(
         JavaPlugin plugin,
@@ -52,6 +57,7 @@ public final class DeathReplayCaptureService {
         }
         ReplayClip clip = possibleClip.get();
         Location deathLocation = victim.getLocation().clone();
+        if (blockRecorder != null) blockRecorder.markTerminalDeath(deathLocation);
         ReplayDeathMoment death = new ReplayDeathMoment(
             clip.attempt(), victim.getUniqueId(), deathLocation.getWorld().getUID(),
             frameRecorder.currentSampleTick(), System.currentTimeMillis(),
@@ -95,7 +101,10 @@ public final class DeathReplayCaptureService {
         List<ReplayCreeperExplosionEvent> explosions = combatRecorder.snapshotExplosionsFor(
             victim.getUniqueId(), clip.attempt(), clip.worldId(), startTick, death.tick()
         );
-        lastFrozen = new FrozenDeathReplay(clip, death, events, visualEvents, explosions);
+        List<ReplayBlockChange> blocks = blockRecorder == null
+            ? List.of() : blockRecorder.snapshotFor(clip);
+        lastFrozen = new FrozenDeathReplay(
+            clip, death, events, visualEvents, explosions, blocks);
         plugin.getLogger().info(
             "Frozen Phase 9B death replay: attempt #" + clip.attempt()
                 + ", victim=" + victim.getName()
@@ -103,9 +112,23 @@ public final class DeathReplayCaptureService {
                 + ", combatEvents=" + events.size()
                 + ", visualEvents=" + visualEvents.size()
                 + ", creeperExplosions=" + explosions.size()
+                + ", blockChanges=" + blocks.size()
                 + " (ready for optional playback)."
         );
         return Optional.of(lastFrozen);
+    }
+
+    /**
+     * Read blocks again immediately before replay spectators attach.
+     * Explosion destruction can be reported AFTER the fatal PlayerDeathEvent.
+     * Entity/camera recordings stay immutable; only terrain is finalized late.
+     */
+    public List<ReplayBlockChange> finalizedTerrain(FrozenDeathReplay replay) {
+        Objects.requireNonNull(replay);
+        if (blockRecorder == null) return replay.blockChanges();
+        List<ReplayBlockChange> updated = blockRecorder.snapshotFor(replay.clip());
+        return updated.size() >= replay.blockChanges().size()
+            ? updated : replay.blockChanges();
     }
 
     /** Available during ENDING for Phase 9C/9D playback. */
@@ -116,5 +139,6 @@ public final class DeathReplayCaptureService {
     public void clear() {
         lastFrozen = null;
         combatRecorder.clear();
+        if (blockRecorder != null) blockRecorder.clear();
     }
 }

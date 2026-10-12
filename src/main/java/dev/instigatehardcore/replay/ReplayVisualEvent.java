@@ -14,7 +14,7 @@ public record ReplayVisualEvent(
     UUID actorId,
     Kind kind
 ) {
-    public enum Kind { SWING_MAIN, SWING_OFF, HURT, CRITICAL }
+    public enum Kind { SWING_MAIN, SWING_OFF, HURT, CRITICAL, EAT_BITE, DRINK_SIP }
 
     public ReplayVisualEvent {
         if (tick < 0 || attempt < 1) {

@@ -13,6 +13,7 @@ public final class ReplayActorPlayback implements AutoCloseable {
     private final ReplayActorTransport transport;
     private final ReplayVisualEventTimeline visualTimeline;
     private final ReplayMovementEffectPlanner movementPlanner;
+    private final ReplayFootstepPlanner footstepPlanner;
     private final ReplayCreeperExplosionTimeline explosionTimeline;
     private boolean closed;
 
@@ -55,6 +56,7 @@ public final class ReplayActorPlayback implements AutoCloseable {
         this.movementPlanner = movementParticlesEnabled
             ? new ReplayMovementEffectPlanner(Math.max(1, Math.min(64, maxParticlesPerTick)))
             : null;
+        this.footstepPlanner = new ReplayFootstepPlanner(8);
     }
 
     public void renderTick(int playbackTick) {
@@ -64,6 +66,7 @@ public final class ReplayActorPlayback implements AutoCloseable {
         transport.apply(session.advanceTo(playbackTick));
         transport.playVisualEvents(visualTimeline.at(playbackTick));
         transport.playCreeperExplosions(explosionTimeline.at(playbackTick));
+        transport.playFootsteps(footstepPlanner.advance(playbackTick, scene.at(playbackTick)));
         if (movementPlanner != null) {
             transport.playMovementEffects(movementPlanner.advance(
                 playbackTick, scene.at(playbackTick)));
