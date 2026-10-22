@@ -35,6 +35,8 @@ death-replay:
   cinematic:
     enabled: true
     hide-scoreboard: true
+    # Turn on only for viewers who have the matching resource pack.
+    resource-pack-hud-enabled: false
 
   camera:
     tracking-enabled: true

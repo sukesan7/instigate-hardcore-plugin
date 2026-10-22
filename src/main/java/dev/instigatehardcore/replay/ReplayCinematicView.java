@@ -40,6 +40,7 @@ public final class ReplayCinematicView implements AutoCloseable {
     private final double smoothing;
     private ReplayPacketCinematicCamera packetCamera;
     private final BossBar bossBar;
+    private final boolean resourcePackHudEnabled;
     private Scoreboard previousScoreboard;
     private Scoreboard emptyScoreboard;
     private ReplayCinematicCameraPath.Frame lastCamera;
@@ -68,6 +69,7 @@ public final class ReplayCinematicView implements AutoCloseable {
         // The old update-interval-ticks option caused visible camera stepping.
         // Cinematic camera targets must update every single server tick.
         this.hideScoreboard = config.getBoolean("death-replay.cinematic.hide-scoreboard", true);
+        this.resourcePackHudEnabled = config.getBoolean("death-replay.cinematic.resource-pack-hud-enabled", false);
         this.bossBar = BossBar.bossBar(
             Component.text("INSTIGATE CAFE  |  DEATHCAM: " + victimName, InstigateTheme.TEXT),
             1.0f, BossBar.Color.PURPLE, BossBar.Overlay.PROGRESS
@@ -81,7 +83,7 @@ public final class ReplayCinematicView implements AutoCloseable {
                 emptyScoreboard = Bukkit.getScoreboardManager().getNewScoreboard();
                 viewer.setScoreboard(emptyScoreboard);
             }
-            viewer.showBossBar(bossBar);
+            if (!resourcePackHudEnabled) viewer.showBossBar(bossBar);
             if (tracking) {
                 ReplayCinematicCameraPath.Frame initial = cameraForVictim(victim);
                 lastCamera = initial;
@@ -89,12 +91,16 @@ public final class ReplayCinematicView implements AutoCloseable {
                     viewer, scene.worldId(), initial
                 );
             }
-            viewer.showTitle(Title.title(
+            if (resourcePackHudEnabled) {
+                viewer.showTitle(ResourcePackReplayHud.title(scene.durationTicks()));
+            } else {
+                viewer.showTitle(Title.title(
                 Component.text("DEATHCAM", InstigateTheme.PURPLE)
                     .decorate(TextDecoration.BOLD),
                 Component.text(victimName, InstigateTheme.TEXT),
                 Title.Times.times(Duration.ZERO, Duration.ofMillis(650), Duration.ofMillis(250))
-            ));
+                ));
+            }
         } catch (RuntimeException exception) {
             close();
             throw exception;
@@ -106,12 +112,14 @@ public final class ReplayCinematicView implements AutoCloseable {
         if (tracking) {
             trackVictim(playbackTick);
         }
-        if (playbackTick % 2 == 0) {
+        if (!resourcePackHudEnabled && playbackTick % 2 == 0) {
             bossBar.progress(ReplayCinematicHudText.fractionRemaining(
                 playbackTick, scene.durationTicks()));
         }
         if (playbackTick % 5 == 0) {
-            viewer.sendActionBar(Component.text()
+            viewer.sendActionBar(resourcePackHudEnabled
+                ? ResourcePackReplayHud.actionBar(victimName, scene)
+                : Component.text()
                 .append(Component.text("DEATHCAM: ", InstigateTheme.PURPLE)
                     .decorate(TextDecoration.BOLD))
                 .append(Component.text(victimName, InstigateTheme.TEXT))
@@ -184,7 +192,7 @@ public final class ReplayCinematicView implements AutoCloseable {
         }
         if (!viewer.isOnline()) return;
         try {
-            viewer.hideBossBar(bossBar);
+            if (!resourcePackHudEnabled) viewer.hideBossBar(bossBar);
         } catch (RuntimeException ignored) {
             // Do not strand hidden ghosts merely because a HUD update fails.
         }
