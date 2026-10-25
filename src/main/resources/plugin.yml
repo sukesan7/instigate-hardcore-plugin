@@ -1,5 +1,5 @@
 name: InstigateHardcore
-version: 1.0.2
+version: 1.0.3
 main: dev.instigatehardcore.InstigateHardcore
 api-version: '26.3'
 

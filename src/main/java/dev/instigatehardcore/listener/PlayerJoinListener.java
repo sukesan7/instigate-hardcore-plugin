@@ -343,7 +343,7 @@ public final class PlayerJoinListener implements Listener {
                     player.getWorld()
                 );
 
-        if (!inActiveWorld) {
+        if (!inActiveWorld || needsFreshReset) {
             boolean moved =
                 moveIntoActiveAttempt(
                     player,
@@ -588,11 +588,16 @@ public final class PlayerJoinListener implements Listener {
             return;
         }
 
+        boolean shouldFreshReset =
+            needsFreshReset
+                && !existingParticipant;
+
         boolean valid =
-            isActiveParticipantLocation(
-                player,
-                expectedAttempt
-            );
+            !shouldFreshReset
+                && isActiveParticipantLocation(
+                    player,
+                    expectedAttempt
+                );
 
         if (valid) {
             normalizeActivePlayer(
@@ -633,17 +638,14 @@ public final class PlayerJoinListener implements Listener {
         }
 
         /*
-         * Something restored the player outside ACTIVE.
+         * Something restored the player outside ACTIVE or a fresh
+         * reset is still required.
          *
          * Correct it.
          *
          * If the player has already been recorded as a
          * participant, never wipe them again.
          */
-        boolean shouldFreshReset =
-            needsFreshReset
-                && !existingParticipant;
-
         enforceActivePlacement(
             player,
             expectedAttempt,
