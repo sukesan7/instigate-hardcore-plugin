@@ -432,6 +432,7 @@ The reset includes gameplay state such as:
 - hunger;
 - potion effects;
 - transient combat state;
+- phantom insomnia counter (`Statistic.TIME_SINCE_REST`);
 - relevant temporary player state.
 
 The plugin does not delete live player `.dat` files.

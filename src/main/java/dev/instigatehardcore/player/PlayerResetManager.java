@@ -2,6 +2,7 @@ package dev.instigatehardcore.player;
 
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+import org.bukkit.Statistic;
 
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
@@ -431,6 +432,10 @@ public final class PlayerResetManager {
             player
         );
 
+        resetInsomniaState(
+            player
+        );
+
         /*
          * Only spectator players may have a spectator target.
          */
@@ -650,6 +655,33 @@ public final class PlayerResetManager {
 
         player.setFallDistance(
             0.0f
+        );
+    }
+
+    /*
+     * ------------------------------------------------------------
+     * INSOMNIA STATE
+     * ------------------------------------------------------------
+     */
+
+    /**
+     * Resets the player's insomnia timer to zero ticks.
+     *
+     * In vanilla Minecraft, phantoms begin spawning once a player has not
+     * rested for at least 72,000 game ticks (~3 in-game days). Because world
+     * time resets alone do not alter this player-bound statistic, fresh hardcore
+     * attempts must zero TIME_SINCE_REST to prevent premature phantom spawns.
+     */
+    public void resetInsomniaState(
+        Player player
+    ) {
+        Objects.requireNonNull(
+            player
+        );
+
+        player.setStatistic(
+            Statistic.TIME_SINCE_REST,
+            0
         );
     }
 }
