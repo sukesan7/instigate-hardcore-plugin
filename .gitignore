@@ -1,6 +1,7 @@
 # Gradle
 .gradle/
 build/
+local.properties
 
 # IntelliJ
 .idea/
@@ -10,24 +11,55 @@ out/
 # VS Code
 .vscode/
 
-# Java
+# Java / JVM artifacts
 *.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
 hs_err_pid*
+replay_pid*
+*.hprof
+*.dump
 
-# OS
+# OS and editor temporary files
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+*.bak
+*.orig
+*~
 
-# Local Paper server
+# Local Paper server and disposable run directories
 server/*
-
-# Keep directory in repository
 !server/.gitkeep
+run/
+run-paper/
+crash-reports/
+logs/
 
-# Runtime/plugin data
+# Runtime / server / plugin state files
 *.log
+*.log.gz
+*.tmp
+eula.txt
+server.properties
+ops.json
+whitelist.json
+usercache.json
+banned-ips.json
+banned-players.json
+stats.properties
+world-state.properties
+attempt-participants.properties
+player-telemetry.yml
 
-# Environment / secrets
+# Environment / secrets / key material
 .env
 .env.*
 !.env.example
+secrets/
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore

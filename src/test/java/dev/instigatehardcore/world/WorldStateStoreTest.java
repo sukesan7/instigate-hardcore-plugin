@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -95,6 +96,29 @@ class WorldStateStoreTest {
                 9,
                 456L
             )
+        );
+    }
+
+    @Test
+    void rejectsSymbolicLinkStateFileAndAttemptOverflow() throws IOException {
+        Path realFile = Files.writeString(
+            temporaryDirectory.resolve("target.properties"),
+            "version=2\nphase=STABLE\nactive.attempt=1\nactive.seed=1\nstandby.attempt=2\nstandby.seed=2\n"
+        );
+        Path symlinkState = temporaryDirectory.resolve("world-state-link.properties");
+        Files.createSymbolicLink(symlinkState, realFile);
+
+        WorldStateStore symlinkStore = new WorldStateStore(symlinkState);
+        assertThrows(IOException.class, symlinkStore::load);
+        assertThrows(
+            IOException.class,
+            () -> symlinkStore.save(new WorldRotationState(1, 1L, 2, 2L, WorldRotationPhase.STABLE))
+        );
+
+        WorldStateStore normalStore = createStore();
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> normalStore.loadOrCreate(Integer.MAX_VALUE)
         );
     }
 

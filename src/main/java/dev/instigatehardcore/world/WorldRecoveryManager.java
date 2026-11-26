@@ -3,6 +3,7 @@ package dev.instigatehardcore.world;
 import dev.instigatehardcore.stats.StatsManager;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -37,10 +38,29 @@ public final class WorldRecoveryManager {
             statsManager
                 .getCurrentAttempt();
 
+        boolean statePreexisted =
+            stateStore.exists();
+
         WorldRotationState state =
             stateStore.loadOrCreate(
                 statsAttempt
             );
+
+        /*
+         * Record only the attempt/seed pairs that were actually persisted
+         * on disk BEFORE recovery ran. Legacy ownership-marker migration uses
+         * this provenance so brand-new installs never claim pre-existing
+         * unrelated world folders.
+         */
+        Map<Integer, Long> preexistingAttemptSeeds =
+            statePreexisted
+                ? Map.of(
+                    state.activeAttempt(),
+                    state.activeSeed(),
+                    state.standbyAttempt(),
+                    state.standbySeed()
+                )
+                : Map.of();
 
         boolean completedIncompleteRotation =
             false;
@@ -160,7 +180,9 @@ public final class WorldRecoveryManager {
         return new RecoveryResult(
             state,
             completedIncompleteRotation,
-            advancedStats
+            advancedStats,
+            statePreexisted,
+            preexistingAttemptSeeds
         );
     }
 
@@ -170,6 +192,12 @@ public final class WorldRecoveryManager {
 
         int promotedAttempt =
             interrupted.standbyAttempt();
+
+        if (promotedAttempt >= Integer.MAX_VALUE) {
+            throw new IOException(
+                "Attempt number overflow while recovering interrupted rotation."
+            );
+        }
 
         long promotedSeed =
             interrupted.standbySeed();
@@ -224,7 +252,29 @@ public final class WorldRecoveryManager {
     public record RecoveryResult(
         WorldRotationState state,
         boolean completedIncompleteRotation,
-        boolean advancedStats
+        boolean advancedStats,
+        boolean statePreexisted,
+        Map<Integer, Long> preexistingAttemptSeeds
     ) {
+        public RecoveryResult {
+            preexistingAttemptSeeds =
+                preexistingAttemptSeeds == null
+                    ? Map.of()
+                    : Map.copyOf(preexistingAttemptSeeds);
+        }
+
+        public RecoveryResult(
+            WorldRotationState state,
+            boolean completedIncompleteRotation,
+            boolean advancedStats
+        ) {
+            this(
+                state,
+                completedIncompleteRotation,
+                advancedStats,
+                false,
+                Map.of()
+            );
+        }
     }
 }
