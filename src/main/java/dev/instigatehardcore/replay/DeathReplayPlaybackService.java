@@ -494,6 +494,12 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                             Level.WARNING, "Could not fully clear deathcam HUD.", exception
                         );
                     }
+                } else if (player.isOnline()) {
+                    try {
+                        player.sendActionBar(Component.empty());
+                    } catch (RuntimeException ignored) {
+                        // Do not block entity cleanup if action-bar clearing fails.
+                    }
                 }
                 if (terrain != null) {
                     try {

@@ -63,6 +63,9 @@ public final class ConfigBounds {
 
     public static final double MAX_LOW_HEALTH_HEARTS = 100.0;
 
+    public static final String DEPRECATED_RESOURCE_PACK_HUD_KEY =
+        "death-replay.cinematic.resource-pack-hud-enabled";
+
     private ConfigBounds() {
     }
 
@@ -135,6 +138,29 @@ public final class ConfigBounds {
         }
         if (config.isBoolean("death-replay.terrain.audio.enabled")) {
             return config.getBoolean("death-replay.terrain.audio.enabled", true);
+        }
+        return true;
+    }
+
+    /**
+     * Emits a single concise startup warning when a legacy configuration still
+     * enables the retired experimental resource-pack HUD option. The option is
+     * always ignored so standard Adventure Deathcam rendering is used.
+     */
+    public static boolean warnIfDeprecatedResourcePackHudEnabled(
+        FileConfiguration config,
+        Logger logger
+    ) {
+        Objects.requireNonNull(config, "config");
+        if (!config.getBoolean(DEPRECATED_RESOURCE_PACK_HUD_KEY, false)) {
+            return false;
+        }
+        if (logger != null) {
+            logger.warning(
+                "Configuration option '" + DEPRECATED_RESOURCE_PACK_HUD_KEY
+                    + "' is deprecated and ignored; the experimental resource-pack HUD "
+                    + "has been retired and the standard Deathcam renderer will be used."
+            );
         }
         return true;
     }

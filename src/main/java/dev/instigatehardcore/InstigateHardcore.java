@@ -103,6 +103,10 @@ public final class InstigateHardcore extends JavaPlugin {
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        ConfigBounds.warnIfDeprecatedResourcePackHudEnabled(
+            getConfig(),
+            getLogger()
+        );
 
         /*
          * Persistent campaign statistics.
