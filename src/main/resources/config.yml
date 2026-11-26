@@ -40,9 +40,6 @@ death-replay:
   cinematic:
     enabled: true
     hide-scoreboard: true
-    # Experimental: requires a matching client resource pack that is NOT
-    # bundled with this plugin. Keep disabled unless all viewers use that pack.
-    resource-pack-hud-enabled: false
 
   camera:
     tracking-enabled: true

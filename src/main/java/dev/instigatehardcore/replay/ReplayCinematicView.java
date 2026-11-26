@@ -1,30 +1,28 @@
 package dev.instigatehardcore.replay;
 
-import dev.instigatehardcore.ui.InstigateTheme;
 import net.kyori.adventure.bossbar.BossBar;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.TextDecoration;
-import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
 import org.bukkit.FluidCollisionMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scoreboard.Scoreboard;
+import org.bukkit.scoreboard.ScoreboardManager;
 import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Vector;
 
-import java.time.Duration;
 import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Per-spectator 9F.4 camera + vanilla-client cinematic HUD.
+ * Per-spectator cinematic camera + standard vanilla-client Deathcam HUD.
  * All calls are synchronous on Paper's server thread.
  *
- * Tracking uses a packet-only MARKER camera target, not continuous player
+ * Tracking uses a packet-only marker camera target, not continuous player
  * teleports. The client interpolates this marker smoothly while the actual
- * spectator stays in place server-side. No NMS or client mod is required.
+ * spectator stays in place server-side. No NMS, client mod, or external
+ * resource pack is required.
  */
 public final class ReplayCinematicView implements AutoCloseable {
     private final Player viewer;
@@ -40,7 +38,7 @@ public final class ReplayCinematicView implements AutoCloseable {
     private final double smoothing;
     private ReplayPacketCinematicCamera packetCamera;
     private final BossBar bossBar;
-    private final boolean resourcePackHudEnabled;
+    private boolean bossBarShown;
     private Scoreboard previousScoreboard;
     private Scoreboard emptyScoreboard;
     private ReplayCinematicCameraPath.Frame lastCamera;
@@ -49,6 +47,16 @@ public final class ReplayCinematicView implements AutoCloseable {
     public ReplayCinematicView(
         JavaPlugin plugin, Player viewer, ReplayActorScene scene,
         boolean enableTracking
+    ) {
+        this(plugin, viewer, scene, enableTracking, resolveScoreboardManager());
+    }
+
+    ReplayCinematicView(
+        JavaPlugin plugin,
+        Player viewer,
+        ReplayActorScene scene,
+        boolean enableTracking,
+        ScoreboardManager scoreboardManager
     ) {
         Objects.requireNonNull(plugin);
         this.viewer = Objects.requireNonNull(viewer);
@@ -66,24 +74,20 @@ public final class ReplayCinematicView implements AutoCloseable {
         this.cameraHeight = clamp(config.getDouble("death-replay.camera.height", 2.2), 1.0, 5.0);
         this.shoulderOffset = clamp(config.getDouble("death-replay.camera.shoulder-offset", 0.8), -2.0, 2.0);
         this.smoothing = clamp(config.getDouble("death-replay.camera.smoothing", 0.25), 0.08, 0.8);
-        // The old update-interval-ticks option caused visible camera stepping.
-        // Cinematic camera targets must update every single server tick.
+        // Cinematic camera targets must update every server tick to avoid stepping.
         this.hideScoreboard = config.getBoolean("death-replay.cinematic.hide-scoreboard", true);
-        this.resourcePackHudEnabled = config.getBoolean("death-replay.cinematic.resource-pack-hud-enabled", false);
-        this.bossBar = BossBar.bossBar(
-            Component.text("INSTIGATE CAFE  |  DEATHCAM: " + victimName, InstigateTheme.TEXT),
-            1.0f, BossBar.Color.PURPLE, BossBar.Overlay.PROGRESS
-        );
+        this.bossBar = ReplayCinematicHudText.bossBar(victimName);
 
         // Treat HUD startup as a transaction; failed initialization must
-        // never leave the scoreboard or boss bar attached to a player.
+        // never leave the scoreboard, boss bar, or packet camera attached.
         try {
-            if (hideScoreboard && Bukkit.getScoreboardManager() != null) {
+            if (hideScoreboard && scoreboardManager != null) {
                 previousScoreboard = viewer.getScoreboard();
-                emptyScoreboard = Bukkit.getScoreboardManager().getNewScoreboard();
+                emptyScoreboard = scoreboardManager.getNewScoreboard();
                 viewer.setScoreboard(emptyScoreboard);
             }
-            if (!resourcePackHudEnabled) viewer.showBossBar(bossBar);
+            viewer.showBossBar(bossBar);
+            bossBarShown = true;
             if (tracking) {
                 ReplayCinematicCameraPath.Frame initial = cameraForVictim(victim);
                 lastCamera = initial;
@@ -91,16 +95,7 @@ public final class ReplayCinematicView implements AutoCloseable {
                     viewer, scene.worldId(), initial
                 );
             }
-            if (resourcePackHudEnabled) {
-                viewer.showTitle(ResourcePackReplayHud.title(scene.durationTicks()));
-            } else {
-                viewer.showTitle(Title.title(
-                Component.text("DEATHCAM", InstigateTheme.PURPLE)
-                    .decorate(TextDecoration.BOLD),
-                Component.text(victimName, InstigateTheme.TEXT),
-                Title.Times.times(Duration.ZERO, Duration.ofMillis(650), Duration.ofMillis(250))
-                ));
-            }
+            viewer.showTitle(ReplayCinematicHudText.title(victimName));
         } catch (RuntimeException exception) {
             close();
             throw exception;
@@ -112,23 +107,13 @@ public final class ReplayCinematicView implements AutoCloseable {
         if (tracking) {
             trackVictim(playbackTick);
         }
-        if (!resourcePackHudEnabled && playbackTick % 2 == 0) {
+        if (playbackTick % 2 == 0) {
             bossBar.progress(ReplayCinematicHudText.fractionRemaining(
                 playbackTick, scene.durationTicks()));
         }
         if (playbackTick % 5 == 0) {
-            viewer.sendActionBar(resourcePackHudEnabled
-                ? ResourcePackReplayHud.actionBar(victimName, scene)
-                : Component.text()
-                .append(Component.text("DEATHCAM: ", InstigateTheme.PURPLE)
-                    .decorate(TextDecoration.BOLD))
-                .append(Component.text(victimName, InstigateTheme.TEXT))
-                .append(Component.text("   •   ", InstigateTheme.MUTED))
-                .append(Component.text(
-                    ReplayCinematicHudText.clock(playbackTick, scene.durationTicks()),
-                    InstigateTheme.AZURE
-                ))
-                .build());
+            viewer.sendActionBar(ReplayCinematicHudText.actionBar(
+                victimName, playbackTick, scene.durationTicks()));
         }
     }
 
@@ -175,6 +160,10 @@ public final class ReplayCinematicView implements AutoCloseable {
             focus.getX(), focus.getY(), focus.getZ());
     }
 
+    private static ScoreboardManager resolveScoreboardManager() {
+        return Bukkit.getServer() == null ? null : Bukkit.getScoreboardManager();
+    }
+
     private static double clamp(double value, double low, double high) {
         if (!Double.isFinite(value)) return low;
         return Math.max(low, Math.min(high, value));
@@ -191,16 +180,23 @@ public final class ReplayCinematicView implements AutoCloseable {
             packetCamera = null;
         }
         if (!viewer.isOnline()) return;
-        try {
-            if (!resourcePackHudEnabled) viewer.hideBossBar(bossBar);
-        } catch (RuntimeException ignored) {
-            // Do not strand hidden ghosts merely because a HUD update fails.
+        if (bossBarShown) {
+            bossBarShown = false;
+            try {
+                viewer.hideBossBar(bossBar);
+            } catch (RuntimeException ignored) {
+                // Do not strand hidden ghosts merely because a HUD update fails.
+            }
         }
         try {
             viewer.clearTitle();
+        } catch (RuntimeException ignored) {
+            // The next reset countdown will replace the title regardless.
+        }
+        try {
             viewer.sendActionBar(Component.empty());
         } catch (RuntimeException ignored) {
-            // The next reset countdown will replace the HUD regardless.
+            // Do not block scoreboard restoration if action-bar cleanup fails.
         }
         if (emptyScoreboard != null && previousScoreboard != null) {
             try {

@@ -2,12 +2,12 @@
 
 ## Supported Versions
 
-**Instigate Hardcore** is in **maintenance mode** (`v1.0.4`). Security fixes and critical stability fixes are targeted at the latest `1.0.x` maintenance release on the supported runtime stack:
+**Instigate Hardcore** is in **maintenance mode** (`v1.0.5`). Security fixes and critical stability fixes are targeted at the latest `1.0.x` maintenance release on the supported runtime stack:
 
 | Version | Status | Supported Stack |
 | --- | --- | --- |
-| `1.0.4` | Supported (maintenance) | Paper `26.3`, Java `25`, PacketEvents `2.14.0` (optional) |
-| `< 1.0.4` | Unsupported | Upgrade to `1.0.4` for world-deletion hardening and production-safe defaults |
+| `1.0.5` | Supported (maintenance) | Paper `26.3`, Java `25`, PacketEvents `2.14.0` (optional) |
+| `< 1.0.5` | Unsupported | Upgrade to `1.0.5` for world-deletion hardening, production-safe defaults, and vanilla-compatible Deathcam HUD rendering |
 
 Other server forks, older Minecraft/Paper versions, or unsupported Java runtimes are not tested or guaranteed.
 
@@ -52,8 +52,8 @@ Even with these safeguards, operators must:
 ### Permissions & Production Defaults
 
 - Keep `instigatehardcore.admin` and `instigatehardcore.debug` restricted to trusted server operators (`default: op`).
-- Keep `death-replay.debug-preview-enabled: false` on production servers (`false` by default in `v1.0.4`). Only enable it temporarily when operators need `/hcreplaytest` in spectator mode.
-- Keep `death-replay.cinematic.resource-pack-hud-enabled: false` unless all players use a matching external resource pack (this feature is **experimental** and no resource pack is bundled).
+- Keep `death-replay.debug-preview-enabled: false` on production servers (`false` by default since `v1.0.4`). Only enable it temporarily when operators need `/hcreplaytest` in spectator mode.
+- The legacy `death-replay.cinematic.resource-pack-hud-enabled` configuration option has been retired and is safely ignored; Deathcam always uses standard Minecraft Adventure components with no external resource pack required.
 - Out-of-range numeric values in `config.yml` (such as excessive `worlds.preload-radius-chunks` or invalid `reset.countdown-seconds`) are rejected and safely bounded with a startup warning.
 
 ### Supply-Chain Verification

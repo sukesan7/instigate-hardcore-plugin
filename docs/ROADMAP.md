@@ -2,7 +2,7 @@
 
 ## Project Status
 
-**Instigate Hardcore** (`v1.0.4`) has fulfilled its original gameplay objectives and is now in **maintenance mode**.
+**Instigate Hardcore** (`v1.0.5`) has fulfilled its original gameplay objectives and is now in **maintenance mode**.
 
 All planned shared-hardcore systems are implemented and shipped:
 
@@ -43,6 +43,11 @@ All planned shared-hardcore systems are implemented and shipped:
 - **Build & supply-chain integrity:** Added read-only Java `25` GitHub Actions CI with SHA-pinned actions, Gradle `9.8.0` wrapper SHA-256 pinning, `gradle/verification-metadata.xml` dependency integrity verification, scoped Maven repositories (`exclusiveContent`), and packaged `META-INF/LICENSE.md` in release JARs.
 - **Documentation & security policy:** Added `SECURITY.md` and refreshed `README.md`, `ARCHITECTURE.md`, `DEVELOPMENT.md`, and `ROADMAP.md` to match implemented functionality and maintenance status.
 
+### `v1.0.5` — Deathcam HUD Compatibility Hotfix
+- **Retired unfinished custom resource-pack HUD:** Removed `ResourcePackReplayHud` (private-use Unicode glyphs and custom font identifiers `instigatehardcore:deathcam` / `instigatehardcore:deathcam_names` that had no distributed client resource pack) so standard Minecraft Adventure components (purple progress boss bar, `DEATHCAM` title + victim name, action-bar replay timer) are the sole Deathcam renderer on all vanilla and compatible clients.
+- **Safe legacy configuration handling:** Removed `death-replay.cinematic.resource-pack-hud-enabled` from shipped `config.yml`; legacy configs containing `resource-pack-hud-enabled: true` are safely ignored with a single startup warning and can no longer trigger missing-glyph boxes.
+- **HUD lifecycle hardening & regression tests:** Separated title/action-bar cleanup error isolation in `ReplayCinematicView`, cleared non-cinematic `"INSTANT REPLAY"` action bars on `DeathReplayPlaybackService` viewer teardown, and added unit regression coverage verifying standard font rendering and cleanup across fresh and legacy configurations.
+
 ---
 
 ## Maintenance Policy
@@ -63,7 +68,7 @@ The following features are **not** implemented and are explicitly out of scope f
 
 - **Death voting** or vote-to-reset mechanics;
 - **Attempt whitelists** or fixed player rosters (use Paper's built-in server whitelist and `players.allow-late-joiners` instead);
-- Client-side mods or bundled custom resource packs (`death-replay.cinematic.resource-pack-hud-enabled` remains an experimental opt-in hook only);
+- Client-side mods or custom resource packs;
 - External SQL/NoSQL database backends or web dashboards;
 - Cross-server or proxy-network synchronization;
 - Runtime `/reload` hot-reloading.

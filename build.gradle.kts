@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "dev.instigatehardcore"
-version = "1.0.4"
+version = "1.0.5"
 
 repositories {
     // Scope third-party repositories strictly to the artifact groups they own
