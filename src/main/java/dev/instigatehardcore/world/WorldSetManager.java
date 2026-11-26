@@ -10,7 +10,11 @@ import org.bukkit.WorldCreator;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class WorldSetManager {
@@ -22,6 +26,7 @@ public final class WorldSetManager {
     private final WorldStateStore stateStore;
     private final String lobbyWorldName;
     private final int preloadRadiusChunks;
+    private final String pluginNamespace;
 
     private World lobbyWorld;
 
@@ -52,6 +57,9 @@ public final class WorldSetManager {
 
         this.preloadRadiusChunks =
             preloadRadiusChunks;
+
+        this.pluginNamespace =
+            plugin.getName().toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -64,6 +72,26 @@ public final class WorldSetManager {
     public synchronized void initialize(
         int currentAttempt
     ) throws IOException {
+        initialize(currentAttempt, Map.of());
+    }
+
+    /**
+     * Loads or creates the permanent lobby, ACTIVE attempt, and STANDBY attempt.
+     *
+     * @param preexistingAttemptSeeds attempt-to-seed pairs that were actually
+     *                                loaded from a pre-existing world-state.properties
+     *                                prior to startup; only matching worlds are
+     *                                eligible for legacy ownership-marker migration.
+     */
+    public synchronized void initialize(
+        int currentAttempt,
+        Map<Integer, Long> preexistingAttemptSeeds
+    ) throws IOException {
+
+        Map<Integer, Long> migrationProvenance =
+            preexistingAttemptSeeds == null
+                ? Map.of()
+                : Map.copyOf(preexistingAttemptSeeds);
 
         lobbyWorld =
             Bukkit.getWorld(
@@ -74,6 +102,18 @@ public final class WorldSetManager {
             throw new IOException(
                 "Lobby world is not loaded: "
                     + lobbyWorldName
+            );
+        }
+
+        if (
+            pluginNamespace.equalsIgnoreCase(
+                lobbyWorld.getKey().getNamespace()
+            )
+        ) {
+            throw new IOException(
+                "Configured worlds.lobby-world points to a managed attempt world ("
+                    + lobbyWorld.getKey()
+                    + "). Configure a permanent non-attempt world as lobby."
             );
         }
 
@@ -113,7 +153,12 @@ public final class WorldSetManager {
         activeWorldSet =
             createOrLoadWorldSet(
                 state.activeAttempt(),
-                state.activeSeed()
+                state.activeSeed(),
+                isEligibleForLegacyMigration(
+                    migrationProvenance,
+                    state.activeAttempt(),
+                    state.activeSeed()
+                )
             );
 
         /*
@@ -135,7 +180,12 @@ public final class WorldSetManager {
         standbyWorldSet =
             createOrLoadWorldSet(
                 state.standbyAttempt(),
-                state.standbySeed()
+                state.standbySeed(),
+                isEligibleForLegacyMigration(
+                    migrationProvenance,
+                    state.standbyAttempt(),
+                    state.standbySeed()
+                )
             );
 
         prepareStandbyWorldSet(
@@ -317,6 +367,12 @@ public final class WorldSetManager {
         WorldSet promoted =
             standbyWorldSet;
 
+        if (promoted.attemptNumber() >= Integer.MAX_VALUE) {
+            throw new IOException(
+                "Attempt number overflow during standby promotion."
+            );
+        }
+
         int nextStandbyAttempt =
             promoted.attemptNumber()
                 + 1;
@@ -434,7 +490,8 @@ public final class WorldSetManager {
         standbyWorldSet =
             createOrLoadWorldSet(
                 state.standbyAttempt(),
-                state.standbySeed()
+                state.standbySeed(),
+                false
             );
 
         prepareStandbyWorldSet(
@@ -668,9 +725,19 @@ public final class WorldSetManager {
         }
     }
 
+    private boolean isEligibleForLegacyMigration(
+        Map<Integer, Long> migrationProvenance,
+        int attemptNumber,
+        long expectedSeed
+    ) {
+        Long persistedSeed = migrationProvenance.get(attemptNumber);
+        return persistedSeed != null && persistedSeed.longValue() == expectedSeed;
+    }
+
     private WorldSet createOrLoadWorldSet(
         int attemptNumber,
-        long seed
+        long seed,
+        boolean eligibleForLegacyMigration
     ) throws IOException {
 
         World overworld =
@@ -678,7 +745,8 @@ public final class WorldSetManager {
                 attemptNumber,
                 seed,
                 "overworld",
-                World.Environment.NORMAL
+                World.Environment.NORMAL,
+                eligibleForLegacyMigration
             );
 
         World nether =
@@ -686,7 +754,8 @@ public final class WorldSetManager {
                 attemptNumber,
                 seed,
                 "nether",
-                World.Environment.NETHER
+                World.Environment.NETHER,
+                eligibleForLegacyMigration
             );
 
         World end =
@@ -694,7 +763,8 @@ public final class WorldSetManager {
                 attemptNumber,
                 seed,
                 "end",
-                World.Environment.THE_END
+                World.Environment.THE_END,
+                eligibleForLegacyMigration
             );
 
         prepareSpawnArea(
@@ -722,7 +792,8 @@ public final class WorldSetManager {
         int attemptNumber,
         long seed,
         String dimension,
-        World.Environment environment
+        World.Environment environment,
+        boolean eligibleForLegacyMigration
     ) throws IOException {
 
         NamespacedKey key =
@@ -730,6 +801,14 @@ public final class WorldSetManager {
                 attemptNumber,
                 dimension
             );
+
+        Path worldContainer =
+            plugin.getServer()
+                .getWorldContainer()
+                .toPath();
+
+        Path lobbyFolder =
+            lobbyWorld.getWorldFolder().toPath();
 
         World existing =
             Bukkit.getWorld(
@@ -743,12 +822,32 @@ public final class WorldSetManager {
                 environment
             );
 
+            ensureWorldOwnershipMarker(
+                worldContainer,
+                lobbyFolder,
+                existing,
+                attemptNumber,
+                dimension,
+                seed,
+                true,
+                eligibleForLegacyMigration
+            );
+
             configureWorld(
                 existing
             );
 
             return existing;
         }
+
+        Set<Path> preexistingCandidates =
+            WorldDeletionGuard.findExistingCandidateFolders(
+                worldContainer,
+                lobbyFolder,
+                pluginNamespace,
+                attemptNumber,
+                dimension
+            );
 
         WorldCreator creator =
             WorldCreator.ofKey(
@@ -776,11 +875,102 @@ public final class WorldSetManager {
             environment
         );
 
+        Path worldFolder = world.getWorldFolder().toPath();
+        boolean existedBeforeCreate =
+            preexistingCandidates.contains(worldFolder.toAbsolutePath().normalize());
+        if (!existedBeforeCreate) {
+            try {
+                existedBeforeCreate =
+                    preexistingCandidates.contains(worldFolder.toRealPath());
+            } catch (IOException ignored) {
+                // Keep lexical check result; marker guard still checks canonical path.
+            }
+        }
+
+        ensureWorldOwnershipMarker(
+            worldContainer,
+            lobbyFolder,
+            world,
+            attemptNumber,
+            dimension,
+            seed,
+            existedBeforeCreate,
+            eligibleForLegacyMigration
+        );
+
         configureWorld(
             world
         );
 
         return world;
+    }
+
+    private void ensureWorldOwnershipMarker(
+        Path worldContainer,
+        Path lobbyFolder,
+        World world,
+        int attemptNumber,
+        String dimension,
+        long seed,
+        boolean existedBeforeCreate,
+        boolean eligibleForLegacyMigration
+    ) {
+        try {
+            WorldDeletionGuard.ExpectedWorldIdentity identity =
+                new WorldDeletionGuard.ExpectedWorldIdentity(
+                    pluginNamespace,
+                    attemptNumber,
+                    dimension,
+                    seed,
+                    world.getUID(),
+                    world.getKey().asString()
+                );
+
+            WorldDeletionGuard.MarkerStatus status =
+                WorldDeletionGuard.ensureOwnershipMarker(
+                    worldContainer,
+                    plugin.getDataFolder().toPath(),
+                    lobbyFolder,
+                    world.getWorldFolder().toPath(),
+                    identity,
+                    existedBeforeCreate,
+                    eligibleForLegacyMigration
+                );
+
+            switch (status) {
+                case CREATED -> plugin.getLogger().fine(
+                    "[Instigate Cafe Hardcore] Recorded ownership marker for "
+                        + world.getKey() + "."
+                );
+                case VERIFIED -> plugin.getLogger().fine(
+                    "[Instigate Cafe Hardcore] Verified ownership marker for "
+                        + world.getKey() + "."
+                );
+                case MIGRATED -> plugin.getLogger().info(
+                    "[Instigate Cafe Hardcore] Migrated ownership marker for existing managed world "
+                        + world.getKey() + "."
+                );
+                case REFUSED_PREEXISTING_UNCLAIMED -> plugin.getLogger().warning(
+                    "[Instigate Cafe Hardcore] Refused to claim pre-existing unmarked world directory for "
+                        + world.getKey()
+                        + ". Automatic cleanup will not delete this directory."
+                );
+                case REFUSED_MISMATCH -> plugin.getLogger().warning(
+                    "[Instigate Cafe Hardcore] Existing ownership marker mismatch for "
+                        + world.getKey()
+                        + ". Leaving marker untouched; automatic cleanup will not delete this directory."
+                );
+            }
+        } catch (IOException | IllegalArgumentException exception) {
+            // Fail safely: never claim or overwrite an unsafe/unrelated directory.
+            plugin.getLogger().warning(
+                "[Instigate Cafe Hardcore] Could not verify or write ownership marker for "
+                    + world.getKey()
+                    + ": "
+                    + exception.getMessage()
+                    + " Automatic cleanup will refuse to delete this directory."
+            );
+        }
     }
 
     private NamespacedKey createWorldKey(
@@ -996,6 +1186,10 @@ public final class WorldSetManager {
 
     public synchronized WorldStateStore getStateStore() {
         return stateStore;
+    }
+
+    public String getPluginNamespace() {
+        return pluginNamespace;
     }
 
     public synchronized boolean hasStandbyWorldSet() {

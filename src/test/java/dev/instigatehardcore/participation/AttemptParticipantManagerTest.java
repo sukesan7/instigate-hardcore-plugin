@@ -6,7 +6,9 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -344,5 +346,41 @@ public final class AttemptParticipantManagerTest {
                 25
             )
         );
+    }
+
+    @Test
+    void batchRecordParticipantsPersistsAtomicallyAndPreservesFirstJoin()
+        throws Exception {
+        Path dataFile = tempDirectory.resolve("attempt-participants.properties");
+        UUID firstId = UUID.randomUUID();
+        UUID secondId = UUID.randomUUID();
+
+        AttemptParticipantManager writer = new AttemptParticipantManager(dataFile);
+        Map<UUID, String> initialBatch = new LinkedHashMap<>();
+        initialBatch.put(firstId, "Alice");
+        initialBatch.put(secondId, "Bob");
+
+        assertEquals(2, writer.recordParticipants(40, initialBatch));
+
+        long aliceJoined = writer.getParticipants(40).stream()
+            .filter(p -> p.uuid().equals(firstId))
+            .findFirst().orElseThrow().firstJoinedAt();
+
+        // Renaming via batch preserves first-join timestamp and returns 0 newly added.
+        assertEquals(0, writer.recordParticipants(40, Map.of(firstId, "AliceRenamed")));
+
+        // Empty batch still ensures the attempt exists on disk.
+        assertEquals(0, writer.recordParticipants(41, Map.of()));
+
+        AttemptParticipantManager reader = new AttemptParticipantManager(dataFile);
+        reader.load();
+
+        assertEquals(2, reader.getParticipantCount(40));
+        assertEquals(0, reader.getParticipantCount(41));
+        AttemptParticipant alice = reader.getParticipants(40).stream()
+            .filter(p -> p.uuid().equals(firstId))
+            .findFirst().orElseThrow();
+        assertEquals("AliceRenamed", alice.name());
+        assertEquals(aliceJoined, alice.firstJoinedAt());
     }
 }

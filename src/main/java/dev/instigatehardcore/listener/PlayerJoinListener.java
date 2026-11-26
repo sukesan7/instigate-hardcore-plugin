@@ -35,6 +35,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.io.IOException;
 
 import java.util.Objects;
+import java.util.logging.Level;
 
 public final class PlayerJoinListener implements Listener {
 
@@ -187,13 +188,11 @@ public final class PlayerJoinListener implements Listener {
         } catch (
             IOException exception
         ) {
-            plugin.getLogger().severe(
-                "Failed to persist player data for "
-                    + player.getName()
-                    + "."
+            plugin.getLogger().log(
+                Level.SEVERE,
+                "Failed to persist player data for " + player.getName() + ".",
+                exception
             );
-
-            exception.printStackTrace();
         }
     }
 
@@ -491,14 +490,13 @@ public final class PlayerJoinListener implements Listener {
         } catch (
             RuntimeException exception
         ) {
-            plugin.getLogger().severe(
-                "[Instigate Cafe] "
-                    + "Failed to move "
+            plugin.getLogger().log(
+                Level.SEVERE,
+                "[Instigate Cafe] Failed to move "
                     + player.getName()
-                    + " into the ACTIVE attempt."
+                    + " into the ACTIVE attempt.",
+                exception
             );
-
-            exception.printStackTrace();
 
             return false;
         }
@@ -792,13 +790,13 @@ public final class PlayerJoinListener implements Listener {
         } catch (
             IOException exception
         ) {
-            plugin.getLogger().severe(
+            plugin.getLogger().log(
+                Level.SEVERE,
                 "Failed to record attempt participation for "
                     + player.getName()
-                    + "."
+                    + ".",
+                exception
             );
-
-            exception.printStackTrace();
         }
     }
 
@@ -923,13 +921,13 @@ public final class PlayerJoinListener implements Listener {
         } catch (
             IOException exception
         ) {
-            plugin.getLogger().severe(
+            plugin.getLogger().log(
+                Level.SEVERE,
                 "Failed to close telemetry session for "
                     + player.getName()
-                    + "."
+                    + ".",
+                exception
             );
-
-            exception.printStackTrace();
         }
 
         playerResetManager

@@ -30,6 +30,7 @@ public final class LowHealthAlertMonitor {
     private final double warningHearts;
     private final double criticalHearts;
     private BukkitTask task;
+    private BukkitTask alarmTask;
     private int nextAlarmTick = Integer.MIN_VALUE;
 
     public LowHealthAlertMonitor(JavaPlugin plugin, RunManager runManager,
@@ -57,6 +58,10 @@ public final class LowHealthAlertMonitor {
         if (task != null) {
             task.cancel();
             task = null;
+        }
+        if (alarmTask != null) {
+            alarmTask.cancel();
+            alarmTask = null;
         }
         policy.clear();
     }
@@ -99,7 +104,15 @@ public final class LowHealthAlertMonitor {
             listener.playSound(listener.getLocation(), Sound.BLOCK_NOTE_BLOCK_BELL,
                 SoundCategory.MASTER, 1.0f, 0.85f);
         }
-        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+        if (alarmTask != null) {
+            alarmTask.cancel();
+            alarmTask = null;
+        }
+        if (!plugin.isEnabled()) {
+            return;
+        }
+        alarmTask = plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            alarmTask = null;
             // Do not leak the second alarm note into the reset or the Deathcam.
             if (!runManager.isActive()) return;
             for (Player listener : plugin.getServer().getOnlinePlayers()) {

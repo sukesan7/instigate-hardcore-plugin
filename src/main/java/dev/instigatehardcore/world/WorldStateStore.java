@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Objects;
@@ -24,17 +25,21 @@ public final class WorldStateStore {
             Objects.requireNonNull(stateFile);
     }
 
+    public synchronized boolean exists() {
+        return Files.exists(stateFile, LinkOption.NOFOLLOW_LINKS);
+    }
+
     public synchronized WorldRotationState loadOrCreate(
         int currentAttempt
     ) throws IOException {
 
-        if (currentAttempt < 1) {
+        if (currentAttempt < 1 || currentAttempt == Integer.MAX_VALUE) {
             throw new IllegalArgumentException(
-                "Current attempt must be at least one."
+                "Current attempt must be between 1 and " + (Integer.MAX_VALUE - 1) + "."
             );
         }
 
-        if (!Files.exists(stateFile)) {
+        if (!Files.exists(stateFile, LinkOption.NOFOLLOW_LINKS)) {
             long activeSeed =
                 randomSeed();
 
@@ -65,9 +70,17 @@ public final class WorldStateStore {
     public synchronized WorldRotationState load()
         throws IOException {
 
-        if (!Files.exists(stateFile)) {
+        if (!Files.exists(stateFile, LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException(
                 "World state file does not exist: "
+                    + stateFile
+            );
+        }
+
+        if (Files.isSymbolicLink(stateFile)
+            || !Files.isRegularFile(stateFile, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException(
+                "World state file must be a regular non-symlink file: "
                     + stateFile
             );
         }
@@ -239,11 +252,25 @@ public final class WorldStateStore {
             )
         );
 
+        if (Files.isSymbolicLink(stateFile)) {
+            throw new IOException(
+                "Refusing to overwrite symbolic-link world state file: "
+                    + stateFile
+            );
+        }
+
         Path temporaryFile =
             stateFile.resolveSibling(
                 stateFile.getFileName()
                     + ".tmp"
             );
+
+        if (Files.isSymbolicLink(temporaryFile)) {
+            throw new IOException(
+                "Refusing to write temporary world state through symbolic link: "
+                    + temporaryFile
+            );
+        }
 
         try (
             OutputStream output =

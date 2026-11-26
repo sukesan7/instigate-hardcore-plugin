@@ -1,26 +1,45 @@
-
 plugins {
     java
     id("xyz.jpenilla.run-paper") version "3.1.0"
 }
 
 group = "dev.instigatehardcore"
-version = "1.0.3"
+version = "1.0.4"
 
 repositories {
-    mavenCentral()
-
-    maven("https://repo.papermc.io/repository/maven-public/") {
-        name = "papermc"
+    // Scope third-party repositories strictly to the artifact groups they own
+    // so dependencies cannot be shadowed across repositories.
+    exclusiveContent {
+        forRepository {
+            maven("https://repo.papermc.io/repository/maven-public/") {
+                name = "papermc"
+            }
+        }
+        filter {
+            includeGroup("io.papermc.paper")
+            includeGroup("net.md-5")
+            includeGroup("com.mojang")
+        }
     }
 
-    // PacketEvents Maven repositories
-    maven("https://repo.codemc.io/repository/maven-releases/") {
-        name = "codemc-releases"
+    exclusiveContent {
+        forRepository {
+            maven("https://repo.codemc.io/repository/maven-releases/") {
+                name = "codemc-releases"
+                mavenContent {
+                    releasesOnly()
+                }
+            }
+        }
+        filter {
+            includeGroup("com.github.retrooper")
+        }
     }
 
-    maven("https://repo.codemc.io/repository/maven-snapshots/") {
-        name = "codemc-snapshots"
+    mavenCentral {
+        mavenContent {
+            releasesOnly()
+        }
     }
 }
 
@@ -28,7 +47,7 @@ dependencies {
     // Paper API
     compileOnly("io.papermc.paper:paper-api:26.3.build.157-beta")
 
-    // PacketEvents — used by the Phase 9D replay renderer.
+    // PacketEvents — optional runtime dependency for rendered Deathcam playback.
     // Supplied by the separate PacketEvents server plugin at runtime.
     compileOnly("com.github.retrooper:packetevents-spigot:2.14.0")
 
@@ -61,6 +80,9 @@ tasks {
 
     jar {
         archiveBaseName.set("InstigateHardcore")
+        from(rootProject.file("LICENSE.md")) {
+            into("META-INF")
+        }
     }
 
     runServer {

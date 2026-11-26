@@ -15,10 +15,15 @@ import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
+import java.util.logging.Level;
 
 public final class WorldRotationManager {
 
@@ -41,6 +46,8 @@ public final class WorldRotationManager {
     private final HardcoreScoreboardManager scoreboardManager;
 
     private boolean rotationInProgress;
+    private BukkitTask standbyGenerationTask;
+    private volatile boolean shuttingDown;
 
     public WorldRotationManager(
         JavaPlugin plugin,
@@ -101,6 +108,15 @@ public final class WorldRotationManager {
     }
 
     public synchronized boolean rotateToStandby() {
+        if (shuttingDown || !plugin.isEnabled()) {
+            plugin.getLogger().warning(
+                "[Instigate Cafe] "
+                    + "Skipping world rotation because the plugin is shutting down."
+            );
+
+            return false;
+        }
+
         if (rotationInProgress) {
             plugin.getLogger().warning(
                 "[Instigate Cafe] "
@@ -171,12 +187,11 @@ public final class WorldRotationManager {
         } catch (
             Exception exception
         ) {
-            plugin.getLogger().severe(
-                "[Instigate Cafe] "
-                    + "Seamless world rotation failed."
+            plugin.getLogger().log(
+                Level.SEVERE,
+                "[Instigate Cafe] Seamless world rotation failed.",
+                exception
             );
-
-            exception.printStackTrace();
 
             moveEveryoneToSafety();
 
@@ -226,14 +241,13 @@ public final class WorldRotationManager {
         } catch (
             IOException exception
         ) {
-            plugin.getLogger().severe(
-                "[Instigate Cafe] "
-                    + "Failed to finalize telemetry for attempt #"
+            plugin.getLogger().log(
+                Level.SEVERE,
+                "[Instigate Cafe] Failed to finalize telemetry for attempt #"
                     + oldAttempt
-                    + " before rotation."
+                    + " before rotation.",
+                exception
             );
-
-            exception.printStackTrace();
         }
 
         /*
@@ -254,23 +268,14 @@ public final class WorldRotationManager {
             .prepareStandbyForActivation();
 
         /*
-         * Make sure the incoming attempt exists in persistent
-         * participation history before players are transferred.
-         */
-        participantManager
-            .ensureAttempt(
-                newAttempt
-            );
-
-        /*
          * Transfer every currently connected player into the
-         * prepared standby attempt.
-         *
-         * Participation is persisted immediately.
+         * prepared standby attempt, then persist all incoming
+         * participants in a single atomic save.
          *
          * Telemetry does NOT begin here because RunManager is
          * still RESETTING.
          */
+        Map<UUID, String> transferredParticipants = new LinkedHashMap<>();
         for (
             Player player :
             plugin.getServer()
@@ -282,13 +287,17 @@ public final class WorldRotationManager {
                     newSpawn
                 );
 
-            participantManager
-                .recordParticipant(
-                    newAttempt,
-                    player.getUniqueId(),
-                    player.getName()
-                );
+            transferredParticipants.put(
+                player.getUniqueId(),
+                player.getName()
+            );
         }
+
+        participantManager
+            .recordParticipants(
+                newAttempt,
+                transferredParticipants
+            );
 
         /*
          * Promote the standby world to ACTIVE and persist the new
@@ -406,42 +415,76 @@ public final class WorldRotationManager {
      * ------------------------------------------------------------
      */
 
-    private void scheduleReplacementStandby() {
-        plugin.getServer()
-            .getScheduler()
-            .runTaskLater(
-                plugin,
-                () -> {
-                    try {
-                        worldSetManager
-                            .createReplacementStandby();
+    private synchronized void scheduleReplacementStandby() {
+        if (shuttingDown || !plugin.isEnabled()) {
+            return;
+        }
 
-                        plugin.getLogger().info(
-                            "[Instigate Cafe] "
-                                + "Replacement standby world is ready."
-                        );
-                    } catch (
-                        IOException exception
-                    ) {
-                        plugin.getLogger().severe(
-                            "[Instigate Cafe] "
-                                + "Failed to create replacement "
-                                + "standby WorldSet."
-                        );
+        if (standbyGenerationTask != null) {
+            standbyGenerationTask.cancel();
+            standbyGenerationTask = null;
+        }
 
-                        exception.printStackTrace();
+        try {
+            standbyGenerationTask =
+                plugin.getServer()
+                    .getScheduler()
+                    .runTaskLater(
+                        plugin,
+                        () -> {
+                            synchronized (this) {
+                                standbyGenerationTask = null;
+                                if (shuttingDown || !plugin.isEnabled()) {
+                                    return;
+                                }
+                            }
 
-                        plugin.getServer().broadcast(
-                            InstigateTheme.chat(
-                                InstigateTheme.error(
-                                    "The next standby world could not be prepared."
-                                )
-                            )
-                        );
-                    }
-                },
-                STANDBY_GENERATION_DELAY_TICKS
+                            try {
+                                worldSetManager
+                                    .createReplacementStandby();
+
+                                plugin.getLogger().info(
+                                    "[Instigate Cafe] "
+                                        + "Replacement standby world is ready."
+                                );
+                            } catch (
+                                IOException exception
+                            ) {
+                                plugin.getLogger().log(
+                                    Level.SEVERE,
+                                    "[Instigate Cafe] "
+                                        + "Failed to create replacement "
+                                        + "standby WorldSet.",
+                                    exception
+                                );
+
+                                plugin.getServer().broadcast(
+                                    InstigateTheme.chat(
+                                        InstigateTheme.error(
+                                            "The next standby world could not be prepared."
+                                        )
+                                    )
+                                );
+                            }
+                        },
+                        STANDBY_GENERATION_DELAY_TICKS
+                    );
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(
+                Level.SEVERE,
+                "[Instigate Cafe] Failed to schedule replacement standby generation.",
+                exception
             );
+        }
+    }
+
+    public synchronized void shutdown() {
+        shuttingDown = true;
+
+        if (standbyGenerationTask != null) {
+            standbyGenerationTask.cancel();
+            standbyGenerationTask = null;
+        }
     }
 
     /*
@@ -563,14 +606,13 @@ public final class WorldRotationManager {
             } catch (
                 IOException exception
             ) {
-                plugin.getLogger().severe(
-                    "[Instigate Cafe] "
-                        + "Unable to close telemetry session for "
+                plugin.getLogger().log(
+                    Level.SEVERE,
+                    "[Instigate Cafe] Unable to close telemetry session for "
                         + player.getName()
-                        + " during emergency recovery."
+                        + " during emergency recovery.",
+                    exception
                 );
-
-                exception.printStackTrace();
             }
 
             try {
@@ -578,6 +620,10 @@ public final class WorldRotationManager {
                     .prepareForCountdown(
                         player
                     );
+
+                if (shuttingDown || !plugin.isEnabled()) {
+                    continue;
+                }
 
                 /*
                  * Schedule the actual lobby teleport onto the
@@ -616,14 +662,13 @@ public final class WorldRotationManager {
             } catch (
                 Exception exception
             ) {
-                plugin.getLogger().severe(
-                    "[Instigate Cafe] "
-                        + "Unable to move "
+                plugin.getLogger().log(
+                    Level.SEVERE,
+                    "[Instigate Cafe] Unable to move "
                         + player.getName()
-                        + " to the safety lobby."
+                        + " to the safety lobby.",
+                    exception
                 );
-
-                exception.printStackTrace();
             }
         }
 

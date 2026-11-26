@@ -174,6 +174,34 @@ class WorldRecoveryManagerTest {
         );
     }
 
+    @Test
+    void freshStartRecordsNoPreexistingAttemptProvenance() throws IOException {
+        StatsManager stats = createStatsManager();
+        WorldStateStore store = createWorldStore();
+
+        WorldRecoveryManager manager = new WorldRecoveryManager(stats, store);
+        WorldRecoveryManager.RecoveryResult result = manager.recover();
+
+        assertFalse(result.statePreexisted());
+        assertTrue(result.preexistingAttemptSeeds().isEmpty());
+    }
+
+    @Test
+    void rotatingRecoveryPreservesPreexistingProvenanceForPromotedAttemptOnly() throws IOException {
+        StatsManager stats = createStatsManager();
+        WorldStateStore store = createWorldStore();
+        store.save(new WorldRotationState(1, 111L, 2, 222L, WorldRotationPhase.ROTATING));
+
+        WorldRecoveryManager manager = new WorldRecoveryManager(stats, store);
+        WorldRecoveryManager.RecoveryResult result = manager.recover();
+
+        assertTrue(result.statePreexisted());
+        assertEquals(111L, result.preexistingAttemptSeeds().get(1));
+        assertEquals(222L, result.preexistingAttemptSeeds().get(2));
+        assertNull(result.preexistingAttemptSeeds().get(3),
+            "Newly planned standby attempt must not be treated as pre-existing");
+    }
+
     private StatsManager createStatsManager()
         throws IOException {
 

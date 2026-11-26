@@ -2,44 +2,34 @@
 
 ## Overview
 
-**Instigate Hardcore** is a Paper plugin for shared-group hardcore Minecraft.
+**Instigate Hardcore** is a Paper `26.3` (Java `25`) plugin for shared-group hardcore survival.
 
 The core rule is simple:
 
-> If one participating player dies, the current attempt ends for everyone.
+> If one participating player dies in an active attempt dimension, the current attempt ends for everyone.
 
-The plugin implements that rule with a rotating world pipeline, persistent attempt state, crash recovery, per-player telemetry, participation tracking, and a compact command/diagnostics layer.
+The plugin implements that rule with a rotating world pipeline, hardened world-deletion safeguards, persistent attempt state, crash/interrupted-rotation recovery, per-player telemetry, participation tracking, an optional packet-only seven-second Deathcam (via PacketEvents), quality-of-life monitors, and a compact command/diagnostics surface.
 
-It was built for **Instigate Cafe**, but the architecture is intentionally generic so any group can install the plugin and use the same shared-hardcore format.
-
----
-
-# Design Goals
-
-The plugin is designed around a few constraints:
-
-- one death ends the shared attempt;
-- the server should not need to restart between attempts;
-- the next attempt should already exist before the current one ends;
-- every attempt must have an isolated Overworld, Nether, and End;
-- stale worlds must be unloaded and removed safely;
-- player inventories and transient state must not leak between attempts;
-- participation and player statistics must survive restarts;
-- a crash during world rotation must be recoverable;
-- no client-side mod should be required.
-
-The architecture therefore separates the system into four broad areas:
-
-1. **Run state**
-2. **World lifecycle**
-3. **Player lifecycle**
-4. **Persistent statistics and diagnostics**
+Built for **Instigate Cafe** and designed to work cleanly on any standard Paper `26.3` server. The project is feature-complete and in **maintenance mode** (`v1.0.4`).
 
 ---
 
-# High-Level Lifecycle
+## Design Goals
 
-Every attempt progresses through a small explicit state machine.
+- One death ends the shared attempt;
+- No server restart required between attempts;
+- The next attempt is prepared ahead of time as a frozen standby world set;
+- Every attempt has an isolated Overworld, Nether, and End sharing one seed;
+- Retired worlds are unloaded and deleted only after strict containment, layout, symlink, and ownership verification;
+- Player inventories, advancements, vitals, and phantom insomnia (`Statistic.TIME_SINCE_REST`) reset cleanly between attempts without deleting live player `.dat` files;
+- Statistics, participation, telemetry, and rotation metadata survive normal restarts and recover from interrupted rotations;
+- No client-side mod is required.
+
+---
+
+## High-Level Lifecycle
+
+Every attempt progresses through an explicit state machine owned by `RunManager`:
 
 ```mermaid
 stateDiagram-v2
@@ -49,738 +39,277 @@ stateDiagram-v2
     ACTIVE --> ENDING: player death
     ACTIVE --> ENDING: confirmed admin reset
 
-    ENDING --> RESETTING: countdown completes
+    ENDING --> RESETTING: deathcam + countdown complete
     RESETTING --> ACTIVE: standby promoted
 ```
 
-The runtime states are:
-
 | State | Meaning |
 | --- | --- |
-| `STARTING` | Server/plugin startup is initializing the current run |
+| `STARTING` | Startup initialization and recovery before gameplay begins |
 | `ACTIVE` | Normal hardcore gameplay |
-| `ENDING` | Attempt has ended and the reset countdown is running |
-| `RESETTING` | The plugin is rotating to the standby world set |
+| `ENDING` | Attempt has ended; optional Deathcam and reset countdown are running |
+| `RESETTING` | Players are resetting/moving and the standby world set is being promoted |
 
-`RunManager` owns these state transitions and prevents duplicate or invalid transitions.
-
----
-
-# World Pipeline
-
-Normal operation keeps two attempt world sets available:
-
-- **ACTIVE** — the attempt currently being played;
-- **STANDBY** — the next attempt, already created and preloaded.
-
-A recently completed world may temporarily exist as:
-
-- **RETIRED** — the previous active world waiting to be unloaded and deleted.
-
-Each attempt owns three separate worlds:
-
-```text
-attempt_000012_overworld
-attempt_000012_nether
-attempt_000012_end
-```
-
-All three dimensions use the same attempt seed.
-
-The permanent lobby is separate from this rotation system.
+`RunManager` guards all state transitions so only the first valid death or confirmed administrative reset can end an attempt.
 
 ---
 
-# World Rotation Model
+## World Pipeline & Rotation Model
+
+Normal operation keeps two attempt world sets loaded:
+
+- **ACTIVE** — the attempt currently being played (`attempt_<NNNNNN>_{overworld,nether,end}`).
+- **STANDBY** — the next attempt (`active + 1`), pre-generated with spawn chunks preloaded and time/weather frozen at morning (`1000L`, `ADVANCE_TIME=false`, `ADVANCE_WEATHER=false`).
+
+A completed attempt temporarily becomes:
+
+- **RETIRED** — the outgoing active set waiting to be unloaded and removed from disk.
+
+The configured permanent lobby world (`worlds.lobby-world`) is completely separate from attempt rotation and is never treated as an attempt world.
 
 ```mermaid
 flowchart LR
-    A["ACTIVE<br/>Attempt #N<br/><br/>Overworld<br/>Nether<br/>End"]
-    S["STANDBY<br/>Attempt #N+1<br/><br/>Overworld<br/>Nether<br/>End"]
-
-    D["Death / Admin Reset"]
-    E["ENDING"]
-    C["Countdown"]
-    R["RESETTING"]
-    P["Promote Standby"]
-    N["ACTIVE<br/>Attempt #N+1"]
-    O["RETIRED<br/>Attempt #N"]
-    G["Generate<br/>Attempt #N+2"]
-    X["Unload + Delete<br/>Attempt #N"]
-
-    A --> D
-    D --> E
-    E --> C
-    C --> R
-    S --> P
+    A["ACTIVE<br/>Attempt #N"] --> D["Death / Admin Reset"]
+    D --> E["ENDING<br/>(Deathcam + Countdown)"]
+    E --> R["RESETTING"]
+    S["STANDBY<br/>Attempt #N+1"] --> P["Promote Standby"]
     R --> P
-    P --> N
-    A --> O
-    O --> X
-    N --> G
+    P --> N["ACTIVE<br/>Attempt #N+1"]
+    A --> O["RETIRED<br/>Attempt #N"]
+    O --> X["Verify + Unload + Async Delete<br/>Attempt #N"]
+    N --> G["Schedule Standby<br/>Attempt #N+2"]
 ```
-
-The standby set exists before it is needed.
-
-For example:
-
-```text
-Current gameplay:
-
-ACTIVE     Attempt #12
-STANDBY    Attempt #13
-```
-
-After Attempt #12 ends:
-
-```text
-RETIRED    Attempt #12
-ACTIVE     Attempt #13
-STANDBY    Attempt #14
-```
-
-This is the core of the seamless reset model.
 
 ---
 
-# Attempt End Flow
+## Attempt End & Deathcam Flow
 
-A real player death and an administrative reset share the same world lifecycle.
+Real player deaths and administrative resets share `AttemptEndManager`, with two intentional differences:
 
-The difference is that only a real death records player death statistics.
+- Only real player deaths record death statistics/telemetry and gather online players as spectators at the death location.
+- Only real player deaths trigger automatic Deathcam playback (when `death-replay.enabled`, `death-replay.automatic-playback-enabled`, PacketEvents, and a captured clip are available, and `reset.countdown-seconds > death-replay.duration-seconds`).
 
 ```mermaid
 sequenceDiagram
     participant Player
     participant Death as DeathListener
     participant End as AttemptEndManager
+    participant Replay as DeathReplayCapture / Playback
     participant Run as RunManager
-    participant Stats as Stats/Telemetry
+    participant Stats as Stats / Telemetry
     participant Countdown
     participant Rotation as WorldRotationManager
 
     Player->>Death: dies in ACTIVE world
     Death->>End: endFromPlayerDeath(...)
     End->>Run: ACTIVE -> ENDING
-    End->>Stats: end active playtime
-    End->>Stats: record death + cause
-    End->>Countdown: start reset countdown
+    End->>Replay: freezeOnDeath(...)
+    End->>Stats: end playtime + record death
+    End->>Replay: play 7s Deathcam (if available)
+    Replay-->>End: completion callback
+    End->>Countdown: start buffer/reset countdown
     Countdown->>Run: ENDING -> RESETTING
     Countdown->>Rotation: rotateToStandby()
-    Rotation->>Rotation: promote STANDBY
-    Rotation->>Stats: advance attempt
+    Rotation->>Rotation: beginRotation -> reset/move players -> promoteStandby
+    Rotation->>Stats: advanceAttempt + batch participants
     Rotation->>Run: RESETTING -> ACTIVE
     Rotation->>Stats: begin new playtime sessions
 ```
 
-The first valid attempt-ending action wins.
-
-Any later death during the same ending sequence cannot create another attempt transition.
+If PacketEvents is absent, replay capture fails, or playback fails mid-clip, `AttemptEndManager` transparently falls back to the standard reset countdown so gameplay rotation never stalls.
 
 ---
 
-# World Persistence and Recovery
+## World Persistence & Crash Recovery
 
-World rotation metadata is stored independently from player statistics.
-
-The persistent state records:
+`WorldStateStore` atomically persists `world-state.properties` (format version `2`, rejecting symbolic-link target or temp files):
 
 ```text
-version
-phase
-active attempt
-active seed
-standby attempt
-standby seed
+version=2
+phase=STABLE | ROTATING
+active.attempt
+active.seed
+standby.attempt
+standby.seed
 ```
 
-The persistent phase is either:
+Before moving the first player during rotation, `WorldSetManager.beginRotation()` persists `phase=ROTATING`. On startup, `WorldRecoveryManager.recover()` runs **before** any attempt worlds are loaded:
 
-- `STABLE`
-- `ROTATING`
-
-Before any player is transferred during rotation, the plugin first persists:
-
-```text
-phase=ROTATING
-```
-
-This makes the transition recoverable.
-
-If Paper stops during rotation, startup recovery can detect the incomplete transition and complete it deterministically.
-
-## Stable State
-
-```text
-ACTIVE     Attempt #20
-STANDBY    Attempt #21
-phase      STABLE
-```
-
-## Incomplete Rotation
-
-```text
-ACTIVE     Attempt #20
-STANDBY    Attempt #21
-phase      ROTATING
-```
-
-On recovery, the persisted standby becomes authoritative:
-
-```text
-ACTIVE     Attempt #21
-STANDBY    Attempt #22
-phase      STABLE
-```
-
-The statistics attempt number is reconciled when necessary.
+- If `phase=ROTATING`, recovery promotes the persisted standby attempt to `ACTIVE`, allocates a new replacement standby attempt (`active + 1`) with a fresh seed, persists `phase=STABLE`, and reconciles `StatsManager` when needed.
+- If `phase=STABLE` but `world-state.properties` is already one attempt ahead of `stats.properties` (crash between `promoteStandby()` and `advanceAttempt()`), recovery advances `StatsManager` to match.
+- `RecoveryResult` records whether `world-state.properties` pre-existed on disk and the exact `(attempt, seed)` pairs that were persisted prior to recovery. This provenance is passed to `WorldSetManager.initialize(...)` for safe legacy ownership-marker migration.
 
 ---
 
-# World Components
+## World Deletion Hardening
 
-## `WorldSet`
+Retired world deletion is separated into `WorldOwnershipMarker`, `WorldDeletionGuard`, `WorldSetManager`, and `WorldCleanupManager`:
 
-A `WorldSet` represents one complete attempt:
+### World Folder Layouts
 
-```text
-attempt number
-seed
-Overworld
-Nether
-End
-```
-
-It provides helpers for:
-
-- checking whether a Bukkit `World` belongs to the attempt;
-- locating the attempt spawn;
-- keeping all three dimensions grouped as one lifecycle unit.
-
-## `WorldSetManager`
-
-Owns the current world references:
+Paper `26.3` stores custom `NamespacedKey` worlds under the server's primary level directory:
 
 ```text
-lobby
-active
-standby
-retired
+<worldContainer>/<level-name>/dimensions/instigatehardcore/attempt_000012_overworld
+<worldContainer>/<level-name>/dimensions/instigatehardcore/attempt_000012_nether
+<worldContainer>/<level-name>/dimensions/instigatehardcore/attempt_000012_end
 ```
 
-Responsibilities include:
+`WorldDeletionGuard` explicitly supports both Paper `26.3+` namespaced dimension trees and classic flat world-container layouts (`<worldContainer>/attempt_000012_<dim>` or `<worldContainer>/instigatehardcore_attempt_000012_<dim>`), while rejecting arbitrary paths, ancestor directories (`world`, `world/dimensions`, `world/dimensions/instigatehardcore`), and vanilla `minecraft:*` dimensions.
 
-- world creation;
-- loading recovered world sets;
-- persisting `ROTATING`;
-- promoting standby to active;
-- creating the replacement standby;
-- validating attempt numbering;
-- preloading spawn-area chunks.
+### Ownership Markers & Safe Migration
 
-## `WorldRotationManager`
-
-Coordinates a successful reset:
-
-1. finalize outgoing telemetry;
-2. persist `ROTATING`;
-3. ensure the incoming attempt exists in participation history;
-4. reset and move all online players;
-5. record participation in the new attempt;
-6. promote standby;
-7. advance persistent attempt statistics;
-8. transition the run back to `ACTIVE`;
-9. start incoming telemetry sessions;
-10. refresh the scoreboard;
-11. announce the new attempt;
-12. schedule retired-world cleanup;
-13. generate the next standby.
-
-## `WorldCleanupManager`
-
-Owns retired-world cleanup.
-
-The cleanup path is:
+Each managed attempt dimension stores `.instigatehardcore-owner.properties`:
 
 ```text
-End
-Nether
-Overworld
+schema=1
+plugin=InstigateHardcore
+namespace=instigatehardcore
+world.key=instigatehardcore:attempt_000012_overworld
+world.uid=<world-uuid>
+attempt=12
+dimension=overworld
+seed=<attempt-seed>
+created.at=<epoch-millis>
+migrated=false|true
 ```
 
-Each retired world is unloaded before its directory is deleted.
+- **Freshly created worlds:** `WorldSetManager` checks existing candidate paths before `WorldCreator.createWorld()`. Newly created worlds receive an atomic ownership marker (`migrated=false`).
+- **Existing installations (`v1.0.0`–`v1.0.3`):** Pre-existing unmarked worlds receive a migrated marker (`migrated=true`) **only** when `world-state.properties` already existed on disk with the exact matching `(attempt, seed)` pair and the world passes seed, environment, canonical containment, layout, and symlink verification.
+- **Fail-safe refusal:** Pre-existing unmarked worlds not backed by pre-existing persisted state, or worlds with corrupt/mismatched markers, are never claimed or overwritten; `WorldCleanupManager` leaves them untouched on disk.
 
-Deletion runs separately from the gameplay transition so a slow filesystem cleanup does not block the next attempt.
+### Deletion Safeguards & Async Lifecycle
 
-The manager also protects:
+Before unloading and again after unloading (and before deleting on the async thread), `WorldCleanupManager` + `WorldDeletionGuard` enforce:
 
-- the configured lobby;
-- the current active set;
-- the current standby set.
+1. **Canonical containment:** Target resolves via `toRealPath()` strictly inside canonical `worldContainer`.
+2. **Symbolic-link rejection:** Refuses symlinks at the target folder, any intermediate segment inside `worldContainer`, the ownership marker file, or any nested file/directory inside the world tree (pre-scanned before deleting a single file, using `Files.walkFileTree` without `FOLLOW_LINKS`).
+3. **Explicit protected-world rejection:** Rejects `worldContainer`, `plugin.getDataFolder()`, configured lobby world (and its primary level root), vanilla `minecraft:*` worlds, all `ACTIVE` and `STANDBY` worlds, persisted `active`/`standby` attempt numbers from `world-state.properties`, and any still-loaded Bukkit world (by key, UID, or canonical folder path).
+4. **Unload ordering:** Unloads `End` → `Nether` → `Overworld` on the main thread when Paper is not ticking worlds and zero players remain inside the retired set, then clears `retiredWorldSet` and dispatches filesystem removal to Paper's async scheduler.
+5. **Async completion tracking & shutdown:** `WorldCleanupManager.isCleanupInProgress()` remains `true` until both unloading and asynchronous filesystem removal finish (cleared in `finally`). On `onDisable()`, `WorldCleanupManager.shutdown()` cancels pending unload retries, stops starting new folder deletions, waits briefly (up to 5 seconds) for in-flight async deletion to finish, and logs any interrupted attempts clearly.
 
 ---
 
-# Lobby and Safety Model
+## Player Lifecycle & Admission
 
-The configured lobby world is permanent.
-
-It is not:
-
-- part of an attempt;
-- deleted during rotation;
-- used as the active hardcore world.
-
-The lobby is primarily a safety destination for exceptional situations.
-
-If world rotation cannot complete safely, online players are moved to the lobby and placed in spectator mode instead of being left inside a partially rotated attempt.
+- **Admission (`AttemptAdmissionPolicy`):** When `players.allow-late-joiners: true` (default), new players may enter an `ACTIVE` attempt mid-run. When `false`, only players already recorded as participants in the current attempt may enter once at least one participant exists; new joiners wait in the safety lobby in spectator mode until the next attempt.
+- **Joining (`PlayerJoinListener`):** Ensures stats registration, assigns the scoreboard, and uses a short delayed verification sequence to place players into `ACTIVE` survival gameplay. First-time participants for the current attempt receive a full clean reset (`PlayerResetManager.prepareForNewAttempt`); reconnecting participants preserve their inventory and progress.
+- **Player reset (`PlayerResetManager`):** Clears inventory, armor, offhand, ender chest, cursor item, XP, potion effects, fire/freeze/velocity/sprint/sneak transient state, resets health/hunger/saturation, and zeros `Statistic.TIME_SINCE_REST` (phantom insomnia reset). Never deletes live player `.dat` files.
+- **Advancement reset (`AttemptAdvancementResetListener`):** Revokes earned advancements once per new attempt using a PersistentDataContainer marker (`instigatehardcore:advancements_reset_attempt`), so dimension travel or reconnecting within the same attempt preserves advancements.
+- **Disconnecting (`PlayerQuitListener`):** Commits the active telemetry playtime session while keeping historical participation intact.
+- **Rotation batching (`WorldRotationManager` + `AttemptParticipantManager`):** Transfers online players into the promoted standby attempt and records all participants in a single atomic save.
 
 ---
 
-# Portals and Dimension Isolation
+## Portals & Dimension Isolation
 
-Each attempt has its own Overworld, Nether, and End.
+`PortalRoutingListener` intercepts `PlayerPortalEvent` and `EntityPortalEvent` for managed worlds:
 
-Portal routing is restricted so travel stays inside the active attempt.
-
-```text
-ACTIVE Overworld
-    ↕
-ACTIVE Nether
-
-ACTIVE Overworld
-    ↕
-ACTIVE End
-```
-
-Portal travel involving the lobby, standby worlds, or retired worlds is blocked or redirected.
-
-The End exit returns players to the current active attempt spawn rather than allowing cross-attempt travel.
+- Routes Nether portals strictly between `ACTIVE Overworld ↔ ACTIVE Nether`.
+- Routes End portals from `ACTIVE Overworld → ACTIVE End`, and End exits back to the player's attempt-local respawn point (or `ACTIVE Overworld` spawn).
+- Cancels portal travel while not `ACTIVE` or from lobby, `STANDBY`, or `RETIRED` worlds.
+- Leaves End gateways untouched inside the active End.
 
 ---
 
-# Player Lifecycle
+## Deathcam / Replay Subsystem
 
-## Joining
+Located in `dev.instigatehardcore.replay`:
 
-When a player joins during `ACTIVE`:
-
-1. the player is ensured in global stats;
-2. the scoreboard is assigned;
-3. the player is placed into the current active attempt if necessary;
-4. participation is recorded;
-5. an active playtime session begins.
-
-If the player is already inside the active world set, the join path is idempotent.
-
-This also corrects stale spectator state after crash recovery.
-
-## Disconnecting
-
-When a player disconnects:
-
-- their current telemetry session is committed;
-- their attempt participation remains recorded.
-
-Participation is historical. Disconnecting does not remove a player from the attempt denominator.
-
-## New Attempt
-
-Every online player moved into the promoted standby world is immediately recorded as a participant in the new attempt.
-
-Each attempt therefore has a fresh participant set.
+- **Capture (`DeathReplayRecorder`, `ReplayCombatRecorder`, `ReplayBlockRecorder`, `DeathReplayCaptureService`):** Main-thread-only bounded rolling buffers capturing Survival players, nearby entities, equipment, movement/fire/creeper state, combat animations, explosions, and optional block/environment changes within configured bounds.
+- **Playback (`DeathReplayPlaybackService`, `ReplayPacketActorTransport`, `ReplayCinematicView`, `ReplayTerrainOverlay`):** Packet-only rendering via optional PacketEvents `2.14.0`. Hides live conflicting entities per viewer, spawns temporary ghost actors, renders optional client-only terrain overrides, and tracks the victim with a packet-only cinematic marker camera. Every viewer resource is torn down transactionally on completion, error, quit, or disable.
+- **Experimental resource-pack HUD (`ResourcePackReplayHud`):** Opt-in via `death-replay.cinematic.resource-pack-hud-enabled` (default `false`); no resource pack is bundled.
+- **Operator debug preview (`ReplayDebugPreviewCommand`):** `/hcreplaytest <player> [pov|cinematic]` requires `instigatehardcore.debug`, `death-replay.debug-preview-enabled: true` (default `false`), PacketEvents, spectator mode, and proximity within 48 blocks.
 
 ---
 
-# Participation Model
+## Quality-of-Life & UI Systems
 
-The plugin intentionally does not use a fixed roster.
-
-A participant is:
-
-> A player who actually entered the active attempt.
-
-For an attempt:
-
-```text
-4 / 5
-```
-
-means:
-
-- 4 participants are currently online in the active world set;
-- 5 unique players have participated in that attempt.
-
-If an offline participant reconnects, the denominator does not increase.
-
-If a new player joins mid-attempt, the denominator increases.
-
-Historical participation is retained for statistics such as attempts played.
+- **`InstigateTheme`:** Centralized Adventure RGB styling (`[Instigate Cafe]` prefix, azure/purple/neutral gray palette, soft red for errors).
+- **`HardcoreScoreboardManager`:** Compact sidebar (`Attempt`, `Run`, paginated `Deaths` with blank Paper `NumberFormat`). Diffs lines on each refresh so unchanged rows do not resend scoreboard packets.
+- **`LowHealthAlertMonitor` + `TieredHealthAlertPolicy`:** Broadcasts warning (<5 hearts, re-arm 6) and critical (<2 hearts, re-arm 3, two-note bell alarm) alerts during `ACTIVE` gameplay only.
+- **`TabHealthDisplay` + `HeartDisplayFormatter`:** Displays color-coded numeric hearts in the player list while preserving other plugins' baseline list names and restoring them cleanly on disable.
 
 ---
 
-# Player Reset Model
+## Persistent Data Files
 
-Between attempts, player state is wiped through the Bukkit/Paper API.
+All plugin data lives under `plugins/InstigateHardcore/`:
 
-The reset includes gameplay state such as:
+| File | Owner | Contents |
+| --- | --- | --- |
+| `stats.properties` | `StatsManager` | Current attempt number, player UUIDs, latest names, total deaths |
+| `attempt-participants.properties` | `AttemptParticipantManager` | Per-attempt existence markers, participant UUIDs, latest names, first-join timestamps |
+| `player-telemetry.yml` | `PlayerTelemetryManager` | Per-attempt playtime (checkpointed every 60s), structured death history (attempt, timestamp, cause, message) |
+| `world-state.properties` | `WorldStateStore` | Rotation format version, `STABLE`/`ROTATING` phase, active/standby attempts and seeds |
 
-- inventory;
-- armor/offhand;
-- ender chest;
-- experience;
-- health;
-- hunger;
-- potion effects;
-- transient combat state;
-- phantom insomnia counter (`Statistic.TIME_SINCE_REST`);
-- relevant temporary player state.
-
-The plugin does not delete live player `.dat` files.
+Additionally, each managed attempt world folder stores `.instigatehardcore-owner.properties` (`WorldOwnershipMarker`).
 
 ---
 
-# Persistent Data
+## Startup & Shutdown Sequences
 
-Instigate Hardcore maintains four primary persistent stores.
+### Startup (`InstigateHardcore.onEnable`)
 
-## `stats.properties`
+1. Save default `config.yml` if missing and validate numeric config bounds via `ConfigBounds`.
+2. Load `StatsManager`.
+3. Run `WorldRecoveryManager.recover()` and initialize `WorldSetManager` (passing pre-existing attempt provenance for safe legacy marker migration).
+4. Load `AttemptParticipantManager` and `PlayerTelemetryManager`.
+5. Transition `RunManager` to `ACTIVE`.
+6. Initialize `PlayerResetManager`, `CountdownManager`, `HardcoreScoreboardManager`, `WorldCleanupManager`, `WorldRotationManager`, `AttemptEndManager`.
+7. Initialize optional Deathcam recorders/capture (`DeathReplayRecorder`, `ReplayCombatRecorder`, `ReplayBlockRecorder`, `DeathReplayCaptureService`).
+8. Register core listeners (`DeathListener`, `PortalRoutingListener`, `PlayerJoinListener`, `PlayerQuitListener`) and QoL services (`AttemptAdvancementResetListener`, `LowHealthAlertMonitor`, `TabHealthDisplay`).
+9. Register commands (`/hardcore` / `/hc` and optional `/hcreplaytest`) and optional automatic `DeathReplayPlaybackService`.
+10. Start telemetry checkpoint timer, start scoreboard, register any already-online players, and log startup state.
 
-Stores:
+### Shutdown (`InstigateHardcore.onDisable`)
 
-```text
-current attempt
-player UUID
-latest player name
-total deaths
-```
-
-Used for the scoreboard, death leaderboard, and current campaign attempt.
-
-## `attempt-participants.properties`
-
-Stores participation history by attempt:
-
-```text
-attempt
-player UUID
-latest name
-first joined timestamp
-```
-
-Used for `/hc status`, attempts played, and historical participant counts.
-
-## `player-telemetry.yml`
-
-Stores:
-
-```text
-latest player name
-playtime by attempt
-structured death history
-```
-
-Structured death records contain:
-
-```text
-attempt
-timestamp
-cause
-vanilla death message
-```
-
-Used for total playtime, average attempt playtime, latest deaths, and most common death cause.
-
-## `world-state.properties`
-
-Stores:
-
-```text
-rotation phase
-active attempt
-active seed
-standby attempt
-standby seed
-```
-
-Used for startup world recovery and incomplete-rotation recovery.
+1. Stop QoL tasks (`TabHealthDisplay`, `LowHealthAlertMonitor`).
+2. Close Deathcam playback, preview sessions, block recorder, capture service, and frame recorder.
+3. Cancel telemetry checkpoint task and `CountdownManager`.
+4. Shut down `WorldRotationManager` (cancel pending standby generation) and `WorldCleanupManager` (cancel pending unload retries, wait briefly for in-flight async deletion).
+5. Stop `HardcoreScoreboardManager` and restore players' main scoreboard.
+6. Finalize and save `PlayerTelemetryManager`, `StatsManager`, and `AttemptParticipantManager`.
 
 ---
 
-# Telemetry Sessions
-
-Active playtime is session-based.
-
-A session begins only when:
-
-- the run is `ACTIVE`;
-- the player is in the active world set.
-
-A session ends when:
-
-- the player disconnects;
-- the attempt ends;
-- the server shuts down;
-- the player is moved to emergency safety.
-
-Active sessions are checkpointed periodically.
-
-Because the current session itself is memory-only, an unexpected hard process crash can lose only the time since the latest checkpoint rather than the entire session.
-
----
-
-# Death Handling
-
-`DeathListener` only treats deaths inside the active world set as attempt-ending deaths.
-
-When a valid death occurs:
-
-- vanilla death chat is suppressed;
-- drops and experience are suppressed;
-- the cause is normalized;
-- attempt ending is delegated to `AttemptEndManager`.
-
-The lifecycle manager then records the player's total death, writes structured death telemetry, ends active playtime sessions, announces the attempt end, and starts the countdown.
-
-Administrative resets use the same transition path but do not create a player death record.
-
----
-
-# User Interface
-
-User-facing styling is centralized through:
-
-```text
-InstigateTheme
-```
-
-The palette uses:
-
-- azure for primary identity;
-- purple for secondary accent;
-- light gray for important values;
-- gray for labels;
-- muted gray for secondary information;
-- soft red only for actual errors or dangerous actions.
-
-Ordinary plugin chat messages use:
-
-```text
-[Instigate Cafe]
-```
-
-Structured views such as `/hc status` and `/hc stats` use a panel-style heading instead of repeating the prefix on every line.
-
-The same theme is shared by commands, attempt lifecycle messages, titles, countdowns, the scoreboard, and errors.
-
----
-
-# Scoreboard
-
-The sidebar is intentionally compact.
-
-```text
-INSTIGATE CAFE
-
-Attempt  #15
-Run  01:42:18
-
-Deaths
-Sukesan  4
-Alex     2
-Daniel   1
-Ryan     0
-```
-
-The scoreboard refreshes on a configurable interval and after attempt rotation.
-
-Paper custom score names are used so visible rows can use Adventure RGB components without showing internal numeric ordering values.
-
----
-
-# Countdown and New Attempt UI
-
-The reset countdown is rendered in the subtitle layer rather than the large title layer.
-
-Example:
-
-```text
-Attempt #15 · Resetting in 8s
-```
-
-When the next attempt activates, players receive:
-
-```text
-INSTIGATE CAFE
-Attempt #15
-```
-
-and:
-
-```text
-[Instigate Cafe] Attempt #15 has begun. Good luck.
-```
-
----
-
-# Commands and Diagnostics
-
-Public commands:
-
-```text
-/hc
-/hc help
-/hc status
-/hc stats
-/hc stats <player>
-/hc deaths
-```
-
-Administrative commands:
-
-```text
-/hc reset
-/hc reset confirm
-/hc worlds
-/hc debug
-```
-
-`/hc reset` requires a second confirmation command, and that confirmation is tied to the current attempt number.
-
-`/hc debug` performs consistency checks across run state, statistics, world sets, persisted rotation state, countdown, cleanup, and participation.
-
----
-
-# Startup Sequence
-
-```mermaid
-flowchart TD
-    A["Load config"]
-    B["Load stats"]
-    C["Recover world state"]
-    D["Load participation"]
-    E["Load telemetry"]
-    F["Start RunManager"]
-    G["Initialize reset/countdown"]
-    H["Initialize scoreboard"]
-    I["Initialize cleanup + rotation"]
-    J["Initialize AttemptEndManager"]
-    K["Register listeners"]
-    L["Register commands"]
-    M["Start telemetry checkpoint"]
-    N["Assign existing players"]
-    O["ACTIVE"]
-
-    A --> B --> C --> D --> E --> F
-    F --> G --> H --> I --> J --> K --> L --> M --> N --> O
-```
-
-World recovery occurs before normal gameplay systems are registered so the plugin knows which attempt is authoritative before players are processed.
-
----
-
-# Shutdown Sequence
-
-On normal shutdown:
-
-1. telemetry checkpoint task is cancelled;
-2. countdown is cancelled;
-3. scoreboard is stopped;
-4. active telemetry sessions are committed;
-5. statistics are saved;
-6. participation data is saved.
-
-The next startup reconstructs runtime-only state from persisted data and loaded worlds.
-
----
-
-# Package Responsibilities
-
-Typical package layout:
+## Package Layout
 
 ```text
 dev.instigatehardcore
-├── command
-├── core
-├── countdown
-├── participation
-├── player
-├── scoreboard
-├── stats
-├── telemetry
-├── ui
-└── world
-```
-
-The main plugin class primarily performs dependency wiring and lifecycle registration.
-
-Business logic lives in dedicated managers and listeners.
-
----
-
-# Invariants
-
-The implementation relies on several important invariants:
-
-1. The active world attempt should equal the statistics attempt.
-2. Standby should normally equal `active + 1`.
-3. An active run should normally have a standby world prepared.
-4. Gameplay during `ACTIVE` should have persistent world phase `STABLE`.
-5. A player death may end an attempt only once.
-6. Administrative reset must never create a player death.
-7. Retired worlds must never be treated as active gameplay worlds.
-8. The lobby must never be deleted as an attempt world.
-9. Participation must be unique per UUID per attempt.
-10. Playtime must only accumulate during active participation.
-
-`/hc debug` exists largely to expose these invariants.
-
----
-
-# Failure Philosophy
-
-When the plugin cannot safely continue a seamless transition, it prefers a recoverable safe state over forcing gameplay forward.
-
-Examples include a missing standby world, attempt mismatch, failed rotation, or invalid persisted state.
-
-The fallback is generally:
-
-```text
-stop active gameplay
-move online players to lobby
-place players in spectator
-log the failure
-recover on restart
+├── InstigateHardcore.java
+├── command         # HardcoreCommand, HardcoreTabCompleter
+├── core            # RunManager, RunState, AttemptEndManager, AttemptEndReason, ConfigBounds
+├── countdown       # CountdownManager
+├── listener        # Death, Join, Quit, PortalRouting, AdvancementReset, LowHealthAlertMonitor
+├── participation   # AttemptParticipantManager, AttemptParticipant, AttemptAdmissionPolicy
+├── player          # PlayerResetManager (including phantom insomnia reset)
+├── replay          # Deathcam capture, models, packet playback, terrain overlay, cinematic HUD, debug preview
+├── scoreboard      # HardcoreScoreboardManager
+├── stats           # StatsManager, PlayerStats
+├── telemetry       # PlayerTelemetryManager, PlayerDeathRecord
+├── ui              # InstigateTheme, TabHealthDisplay, HeartDisplayFormatter
+└── world           # WorldSet, WorldSetManager, WorldRotationManager, WorldCleanupManager,
+                    # WorldRecoveryManager, WorldStateStore, WorldDeletionGuard, WorldOwnershipMarker
 ```
 
 ---
 
-# Testing Strategy
+## Core Invariants
 
-The automated suite focuses on deterministic state and persistence behavior.
-
-Regression coverage includes:
-
-- participant uniqueness;
-- participant persistence;
-- rename handling;
-- attempts-played semantics;
-- empty attempt persistence;
-- telemetry death persistence;
-- latest-death ordering;
-- death-cause aggregation;
-- active session handling;
-- attempt-specific session closure;
-- checkpoint persistence;
-- shutdown persistence.
-
-World creation, portal routing, live player transitions, title rendering, scoreboard rendering, and server lifecycle behavior require Paper integration/manual testing.
-
-See [`DEVELOPMENT.md`](DEVELOPMENT.md) for the development workflow.
+1. Active world attempt equals `StatsManager` current attempt during `ACTIVE` state.
+2. Standby attempt normally equals `active + 1` and remains frozen until activation.
+3. Persistent phase is `STABLE` during normal `ACTIVE` gameplay and `ROTATING` only across the rotation transaction.
+4. A player death can end an attempt at most once; administrative resets never record a player death.
+5. Retired worlds are never treated as active gameplay worlds and are never deleted without passing containment, layout, symlink, protection, and ownership verification.
+6. The permanent lobby world and vanilla `minecraft:*` dimensions can never be deleted.
+7. Participation is unique per UUID per attempt; playtime accumulates only during `ACTIVE` gameplay.
 
 ---
 
-# Related Documentation
+## Related Documentation
 
-- [`../README.md`](../README.md) — public overview and installation
-- [`DEVELOPMENT.md`](DEVELOPMENT.md) — local development and testing
-- [`ROADMAP.md`](ROADMAP.md) — development status and remaining work
+- [`../README.md`](../README.md) — overview, installation, commands, and upgrade instructions
+- [`../SECURITY.md`](../SECURITY.md) — vulnerability reporting and data-loss safeguards
+- [`DEVELOPMENT.md`](DEVELOPMENT.md) — local build, supply-chain verification, and regression testing
+- [`ROADMAP.md`](ROADMAP.md) — release history, maintenance status, and explicit non-goals

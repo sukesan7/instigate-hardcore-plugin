@@ -1,5 +1,6 @@
 package dev.instigatehardcore.scoreboard;
 
+import dev.instigatehardcore.core.ConfigBounds;
 import dev.instigatehardcore.core.RunManager;
 import dev.instigatehardcore.stats.PlayerStats;
 import dev.instigatehardcore.stats.StatsManager;
@@ -43,9 +44,11 @@ public final class HardcoreScoreboardManager {
     private final StatsManager statsManager;
 
     private final long updateIntervalTicks;
+    private final int pageIntervalSeconds;
 
     private Scoreboard scoreboard;
     private Objective objective;
+    private List<Component> lastRenderedLines = List.of();
 
     private BukkitTask updateTask;
 
@@ -78,6 +81,19 @@ public final class HardcoreScoreboardManager {
 
         this.updateIntervalTicks =
             updateIntervalTicks;
+
+        this.pageIntervalSeconds =
+            ConfigBounds.boundedInt(
+                plugin.getConfig().getInt(
+                    "scoreboard.page-interval-seconds",
+                    ConfigBounds.DEFAULT_SCOREBOARD_PAGE_SECONDS
+                ),
+                ConfigBounds.MIN_SCOREBOARD_PAGE_SECONDS,
+                ConfigBounds.MAX_SCOREBOARD_PAGE_SECONDS,
+                ConfigBounds.DEFAULT_SCOREBOARD_PAGE_SECONDS,
+                "scoreboard.page-interval-seconds",
+                plugin.getLogger()
+            );
     }
 
     /*
@@ -181,56 +197,55 @@ public final class HardcoreScoreboardManager {
     public void refresh() {
         ensureScoreboard();
 
-        /*
-         * Remove all old rows before rebuilding the compact view.
-         */
-        for (
-            String entry :
-            new ArrayList<>(
-                scoreboard.getEntries()
-            )
-        ) {
-            scoreboard.resetScores(
-                entry
-            );
-        }
-
         List<Component> lines =
             buildLines();
 
-        int scoreValue =
+        if (lines.equals(lastRenderedLines)) {
+            return;
+        }
+
+        int previousSize =
+            lastRenderedLines.size();
+
+        int newSize =
             lines.size();
 
-        for (
-            int index = 0;
-            index < lines.size();
-            index++
-        ) {
+        // Remove only trailing rows when the sidebar shrinks.
+        for (int index = newSize; index < previousSize; index++) {
+            scoreboard.resetScores("ihc_line_" + index);
+        }
+
+        boolean sizeChanged = previousSize != newSize;
+
+        for (int index = 0; index < newSize; index++) {
+            Component nextLine = lines.get(index);
+            if (!sizeChanged
+                && index < previousSize
+                && Objects.equals(lastRenderedLines.get(index), nextLine)) {
+                continue;
+            }
+
             /*
              * Each underlying score entry must be unique.
              *
              * The player never sees this key because Paper's
              * customName component replaces its visible text.
              */
-            String entry =
-                "ihc_line_"
-                    + index;
-
             Score score =
                 objective.getScore(
-                    entry
+                    "ihc_line_" + index
                 );
 
             score.setScore(
-                scoreValue--
+                newSize - index
             );
 
             score.customName(
-                lines.get(
-                    index
-                )
+                nextLine
             );
         }
+
+        lastRenderedLines = List.copyOf(lines);
     }
 
     private List<Component> buildLines() {
@@ -318,10 +333,7 @@ public final class HardcoreScoreboardManager {
         int pageCount = Math.max(1,
             (players.size() + MAX_DEATH_ROWS - 1) / MAX_DEATH_ROWS
         );
-        int intervalSeconds = Math.max(1,
-            plugin.getConfig().getInt("scoreboard.page-interval-seconds", 10)
-        );
-        int page = (int) ((Bukkit.getCurrentTick() / (20L * intervalSeconds))
+        int page = (int) ((Bukkit.getCurrentTick() / (20L * pageIntervalSeconds))
             % pageCount);
         int first = page * MAX_DEATH_ROWS;
         int last = Math.min(first + MAX_DEATH_ROWS, players.size());
@@ -393,6 +405,8 @@ public final class HardcoreScoreboardManager {
         objective.numberFormat(
             NumberFormat.blank()
         );
+
+        lastRenderedLines = List.of();
     }
 
     /*

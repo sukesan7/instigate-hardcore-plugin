@@ -58,6 +58,14 @@ import java.util.UUID;
 public final class ReplayBlockRecorder implements Listener {
     private static final String AIR = "minecraft:air";
     private static final int MAX_RECENT_CHANGES = 8192;
+    private static final org.bukkit.block.BlockFace[] CARDINAL_FACES = {
+        org.bukkit.block.BlockFace.UP,
+        org.bukkit.block.BlockFace.DOWN,
+        org.bukkit.block.BlockFace.NORTH,
+        org.bukkit.block.BlockFace.SOUTH,
+        org.bukkit.block.BlockFace.EAST,
+        org.bukkit.block.BlockFace.WEST
+    };
 
     private final JavaPlugin plugin;
     private final RunManager runManager;
@@ -306,15 +314,16 @@ public final class ReplayBlockRecorder implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onRedstone(BlockRedstoneEvent event) {
+        if (!environmentEnabled || !runManager.isActive()) {
+            return;
+        }
         // Catch powered doors, trapdoors, lamps and comparable neighboring
         // block-state changes, but only in the active recording radius.
         Block source = event.getBlock();
         watch(source);
-        for (org.bukkit.block.BlockFace face : new org.bukkit.block.BlockFace[]{
-            org.bukkit.block.BlockFace.UP, org.bukkit.block.BlockFace.DOWN,
-            org.bukkit.block.BlockFace.NORTH, org.bukkit.block.BlockFace.SOUTH,
-            org.bukkit.block.BlockFace.EAST, org.bukkit.block.BlockFace.WEST
-        }) watch(source.getRelative(face));
+        for (org.bukkit.block.BlockFace face : CARDINAL_FACES) {
+            watch(source.getRelative(face));
+        }
     }
 
     /** Discard stale sampled state whenever we have an authoritative event. */
@@ -442,13 +451,21 @@ public final class ReplayBlockRecorder implements Listener {
     }
 
     private boolean nearActivePlayer(Block block) {
+        World blockWorld = block.getWorld();
+        double bx = block.getX() + 0.5;
+        double by = block.getY() + 0.5;
+        double bz = block.getZ() + 0.5;
         double radiusSquared = (double) radius * radius;
         for (Player player : plugin.getServer().getOnlinePlayers()) {
             if (!player.isDead() && player.getGameMode() == GameMode.SURVIVAL
-                && player.getWorld().equals(block.getWorld())
-                && player.getLocation().distanceSquared(block.getLocation().add(0.5, 0.5, 0.5))
-                    <= radiusSquared) {
-                return true;
+                && player.getWorld().equals(blockWorld)) {
+                Location playerLoc = player.getLocation();
+                double dx = playerLoc.getX() - bx;
+                double dy = playerLoc.getY() - by;
+                double dz = playerLoc.getZ() - bz;
+                if (dx * dx + dy * dy + dz * dz <= radiusSquared) {
+                    return true;
+                }
             }
         }
         return false;

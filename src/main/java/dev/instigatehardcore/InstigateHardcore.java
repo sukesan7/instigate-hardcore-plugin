@@ -4,6 +4,7 @@ import dev.instigatehardcore.command.HardcoreCommand;
 import dev.instigatehardcore.command.HardcoreTabCompleter;
 
 import dev.instigatehardcore.core.AttemptEndManager;
+import dev.instigatehardcore.core.ConfigBounds;
 import dev.instigatehardcore.core.RunManager;
 
 import dev.instigatehardcore.countdown.CountdownManager;
@@ -47,6 +48,7 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.logging.Level;
 
 public final class InstigateHardcore extends JavaPlugin {
 
@@ -95,6 +97,8 @@ public final class InstigateHardcore extends JavaPlugin {
     private TabHealthDisplay tabHealthDisplay;
 
     private BukkitTask telemetryCheckpointTask;
+    private int replayDurationSeconds = ConfigBounds.DEFAULT_REPLAY_DURATION_SECONDS;
+    private int replayCaptureRadiusBlocks = ConfigBounds.DEFAULT_REPLAY_CAPTURE_RADIUS_BLOCKS;
 
     @Override
     public void onEnable() {
@@ -237,6 +241,14 @@ public final class InstigateHardcore extends JavaPlugin {
             countdownManager.cancel();
         }
 
+        if (worldRotationManager != null) {
+            worldRotationManager.shutdown();
+        }
+
+        if (worldCleanupManager != null) {
+            worldCleanupManager.shutdown();
+        }
+
         if (scoreboardManager != null) {
             scoreboardManager.stop();
         }
@@ -251,12 +263,11 @@ public final class InstigateHardcore extends JavaPlugin {
             } catch (
                 IOException exception
             ) {
-                getLogger().severe(
-                    "Failed to finalize player telemetry "
-                        + "during shutdown."
+                getLogger().log(
+                    Level.SEVERE,
+                    "Failed to finalize player telemetry during shutdown.",
+                    exception
                 );
-
-                exception.printStackTrace();
             }
         }
 
@@ -266,12 +277,11 @@ public final class InstigateHardcore extends JavaPlugin {
             } catch (
                 IOException exception
             ) {
-                getLogger().severe(
-                    "Failed to save persistent statistics "
-                        + "during shutdown."
+                getLogger().log(
+                    Level.SEVERE,
+                    "Failed to save persistent statistics during shutdown.",
+                    exception
                 );
-
-                exception.printStackTrace();
             }
         }
 
@@ -281,12 +291,11 @@ public final class InstigateHardcore extends JavaPlugin {
             } catch (
                 IOException exception
             ) {
-                getLogger().severe(
-                    "Failed to save attempt participation history "
-                        + "during shutdown."
+                getLogger().log(
+                    Level.SEVERE,
+                    "Failed to save attempt participation history during shutdown.",
+                    exception
                 );
-
-                exception.printStackTrace();
             }
         }
 
@@ -321,11 +330,11 @@ public final class InstigateHardcore extends JavaPlugin {
         } catch (
             IOException exception
         ) {
-            getLogger().severe(
-                "Unable to load persistent hardcore statistics."
+            getLogger().log(
+                Level.SEVERE,
+                "Unable to load persistent hardcore statistics.",
+                exception
             );
-
-            exception.printStackTrace();
 
             disableSelf();
 
@@ -360,23 +369,17 @@ public final class InstigateHardcore extends JavaPlugin {
         }
 
         int preloadRadius =
-            getConfig().getInt(
+            ConfigBounds.boundedInt(
+                getConfig().getInt(
+                    "worlds.preload-radius-chunks",
+                    DEFAULT_PRELOAD_RADIUS_CHUNKS
+                ),
+                ConfigBounds.MIN_PRELOAD_RADIUS_CHUNKS,
+                ConfigBounds.MAX_PRELOAD_RADIUS_CHUNKS,
+                DEFAULT_PRELOAD_RADIUS_CHUNKS,
                 "worlds.preload-radius-chunks",
-                DEFAULT_PRELOAD_RADIUS_CHUNKS
+                getLogger()
             );
-
-        if (preloadRadius < 0) {
-            getLogger().warning(
-                "Invalid worlds.preload-radius-chunks value: "
-                    + preloadRadius
-                    + ". Using "
-                    + DEFAULT_PRELOAD_RADIUS_CHUNKS
-                    + "."
-            );
-
-            preloadRadius =
-                DEFAULT_PRELOAD_RADIUS_CHUNKS;
-        }
 
         worldStateStore =
             new WorldStateStore(
@@ -393,8 +396,9 @@ public final class InstigateHardcore extends JavaPlugin {
                 worldStateStore
             );
 
+        WorldRecoveryManager.RecoveryResult recovery;
         try {
-            WorldRecoveryManager.RecoveryResult recovery =
+            recovery =
                 worldRecoveryManager
                     .recover();
 
@@ -431,11 +435,11 @@ public final class InstigateHardcore extends JavaPlugin {
         } catch (
             IOException exception
         ) {
-            getLogger().severe(
-                "Unable to recover persistent hardcore world state."
+            getLogger().log(
+                Level.SEVERE,
+                "Unable to recover persistent hardcore world state.",
+                exception
             );
-
-            exception.printStackTrace();
 
             disableSelf();
 
@@ -453,18 +457,19 @@ public final class InstigateHardcore extends JavaPlugin {
         try {
             worldSetManager.initialize(
                 statsManager
-                    .getCurrentAttempt()
+                    .getCurrentAttempt(),
+                recovery.preexistingAttemptSeeds()
             );
 
             return true;
         } catch (
             IOException exception
         ) {
-            getLogger().severe(
-                "Unable to initialize hardcore world pipeline."
+            getLogger().log(
+                Level.SEVERE,
+                "Unable to initialize hardcore world pipeline.",
+                exception
             );
-
-            exception.printStackTrace();
 
             disableSelf();
 
@@ -500,11 +505,11 @@ public final class InstigateHardcore extends JavaPlugin {
         } catch (
             IOException exception
         ) {
-            getLogger().severe(
-                "Unable to load attempt participation history."
+            getLogger().log(
+                Level.SEVERE,
+                "Unable to load attempt participation history.",
+                exception
             );
-
-            exception.printStackTrace();
 
             disableSelf();
 
@@ -535,11 +540,11 @@ public final class InstigateHardcore extends JavaPlugin {
         } catch (
             IOException exception
         ) {
-            getLogger().severe(
-                "Unable to load persistent player telemetry."
+            getLogger().log(
+                Level.SEVERE,
+                "Unable to load persistent player telemetry.",
+                exception
             );
-
-            exception.printStackTrace();
 
             disableSelf();
 
@@ -560,11 +565,11 @@ public final class InstigateHardcore extends JavaPlugin {
                         } catch (
                             IOException exception
                         ) {
-                            getLogger().severe(
-                                "Failed to checkpoint player telemetry."
+                            getLogger().log(
+                                Level.SEVERE,
+                                "Failed to checkpoint player telemetry.",
+                                exception
                             );
-
-                            exception.printStackTrace();
                         }
                     },
                     TELEMETRY_CHECKPOINT_INTERVAL_TICKS,
@@ -580,23 +585,17 @@ public final class InstigateHardcore extends JavaPlugin {
 
     private void initializeCountdown() {
         int configuredSeconds =
-            getConfig().getInt(
+            ConfigBounds.boundedInt(
+                getConfig().getInt(
+                    "reset.countdown-seconds",
+                    DEFAULT_COUNTDOWN_SECONDS
+                ),
+                ConfigBounds.MIN_COUNTDOWN_SECONDS,
+                ConfigBounds.MAX_COUNTDOWN_SECONDS,
+                DEFAULT_COUNTDOWN_SECONDS,
                 "reset.countdown-seconds",
-                DEFAULT_COUNTDOWN_SECONDS
+                getLogger()
             );
-
-        if (configuredSeconds < 1) {
-            getLogger().warning(
-                "Invalid reset.countdown-seconds value: "
-                    + configuredSeconds
-                    + ". Using default of "
-                    + DEFAULT_COUNTDOWN_SECONDS
-                    + "."
-            );
-
-            configuredSeconds =
-                DEFAULT_COUNTDOWN_SECONDS;
-        }
 
         countdownManager =
             new CountdownManager(
@@ -624,23 +623,17 @@ public final class InstigateHardcore extends JavaPlugin {
         }
 
         long updateInterval =
-            getConfig().getLong(
+            ConfigBounds.boundedLong(
+                getConfig().getLong(
+                    "scoreboard.update-interval-ticks",
+                    DEFAULT_SCOREBOARD_UPDATE_INTERVAL
+                ),
+                ConfigBounds.MIN_SCOREBOARD_UPDATE_TICKS,
+                ConfigBounds.MAX_SCOREBOARD_UPDATE_TICKS,
+                DEFAULT_SCOREBOARD_UPDATE_INTERVAL,
                 "scoreboard.update-interval-ticks",
-                DEFAULT_SCOREBOARD_UPDATE_INTERVAL
+                getLogger()
             );
-
-        if (updateInterval < 1) {
-            getLogger().warning(
-                "Invalid scoreboard update interval: "
-                    + updateInterval
-                    + ". Using "
-                    + DEFAULT_SCOREBOARD_UPDATE_INTERVAL
-                    + " ticks."
-            );
-
-            updateInterval =
-                DEFAULT_SCOREBOARD_UPDATE_INTERVAL;
-        }
 
         scoreboardManager =
             new HardcoreScoreboardManager(
@@ -699,19 +692,52 @@ public final class InstigateHardcore extends JavaPlugin {
             return;
         }
 
+        replayDurationSeconds = ConfigBounds.boundedInt(
+            getConfig().getInt("death-replay.duration-seconds", ConfigBounds.DEFAULT_REPLAY_DURATION_SECONDS),
+            ConfigBounds.MIN_REPLAY_DURATION_SECONDS,
+            ConfigBounds.MAX_REPLAY_DURATION_SECONDS,
+            ConfigBounds.DEFAULT_REPLAY_DURATION_SECONDS,
+            "death-replay.duration-seconds",
+            getLogger()
+        );
+        int captureIntervalTicks = ConfigBounds.boundedInt(
+            getConfig().getInt("death-replay.capture-interval-ticks", ConfigBounds.DEFAULT_REPLAY_CAPTURE_INTERVAL_TICKS),
+            ConfigBounds.MIN_REPLAY_CAPTURE_INTERVAL_TICKS,
+            ConfigBounds.MAX_REPLAY_CAPTURE_INTERVAL_TICKS,
+            ConfigBounds.DEFAULT_REPLAY_CAPTURE_INTERVAL_TICKS,
+            "death-replay.capture-interval-ticks",
+            getLogger()
+        );
+        replayCaptureRadiusBlocks = ConfigBounds.boundedInt(
+            getConfig().getInt("death-replay.capture-radius-blocks", ConfigBounds.DEFAULT_REPLAY_CAPTURE_RADIUS_BLOCKS),
+            ConfigBounds.MIN_REPLAY_CAPTURE_RADIUS_BLOCKS,
+            ConfigBounds.MAX_REPLAY_CAPTURE_RADIUS_BLOCKS,
+            ConfigBounds.DEFAULT_REPLAY_CAPTURE_RADIUS_BLOCKS,
+            "death-replay.capture-radius-blocks",
+            getLogger()
+        );
+        int maxActorsPerFrame = ConfigBounds.boundedInt(
+            getConfig().getInt("death-replay.max-actors-per-frame", ConfigBounds.DEFAULT_REPLAY_MAX_ACTORS_PER_FRAME),
+            ConfigBounds.MIN_REPLAY_MAX_ACTORS_PER_FRAME,
+            ConfigBounds.MAX_REPLAY_MAX_ACTORS_PER_FRAME,
+            ConfigBounds.DEFAULT_REPLAY_MAX_ACTORS_PER_FRAME,
+            "death-replay.max-actors-per-frame",
+            getLogger()
+        );
+
         deathReplayRecorder = new DeathReplayRecorder(
             this,
             runManager,
             statsManager,
             worldSetManager,
-            getConfig().getInt("death-replay.duration-seconds", 7),
-            getConfig().getInt("death-replay.capture-interval-ticks", 2),
-            getConfig().getInt("death-replay.capture-radius-blocks", 24),
-            getConfig().getInt("death-replay.max-actors-per-frame", 48)
+            replayDurationSeconds,
+            captureIntervalTicks,
+            replayCaptureRadiusBlocks,
+            maxActorsPerFrame
         );
 
         deathReplayRecorder.start();
-        getLogger().info("Phase 9A rolling death replay recorder started.");
+        getLogger().info("Rolling death replay recorder started.");
     }
 
     private void initializeDeathReplayCapture() {
@@ -726,7 +752,7 @@ public final class InstigateHardcore extends JavaPlugin {
             statsManager,
             worldSetManager,
             deathReplayRecorder,
-            getConfig().getInt("death-replay.capture-radius-blocks", 24)
+            replayCaptureRadiusBlocks
         );
 
         getServer().getPluginManager().registerEvents(
@@ -740,28 +766,60 @@ public final class InstigateHardcore extends JavaPlugin {
             replayCombatRecorder
         );
 
-        // Phase 10: block changes are optional and never modify the world.
+        // Block changes are optional and never modify the world.
         if (getConfig().getBoolean("death-replay.terrain.enabled", false)) {
+            int terrainRadius = ConfigBounds.boundedInt(
+                getConfig().getInt("death-replay.terrain.capture-radius-blocks", ConfigBounds.DEFAULT_REPLAY_CAPTURE_RADIUS_BLOCKS),
+                ConfigBounds.MIN_REPLAY_CAPTURE_RADIUS_BLOCKS,
+                ConfigBounds.MAX_REPLAY_CAPTURE_RADIUS_BLOCKS,
+                ConfigBounds.DEFAULT_REPLAY_CAPTURE_RADIUS_BLOCKS,
+                "death-replay.terrain.capture-radius-blocks",
+                getLogger()
+            );
+            int maxChangesPerClip = ConfigBounds.boundedInt(
+                getConfig().getInt("death-replay.terrain.max-changes-per-clip", ConfigBounds.DEFAULT_TERRAIN_MAX_CHANGES_PER_CLIP),
+                ConfigBounds.MIN_TERRAIN_MAX_CHANGES_PER_CLIP,
+                ConfigBounds.MAX_TERRAIN_MAX_CHANGES_PER_CLIP,
+                ConfigBounds.DEFAULT_TERRAIN_MAX_CHANGES_PER_CLIP,
+                "death-replay.terrain.max-changes-per-clip",
+                getLogger()
+            );
+            int maxWatchedBlocks = ConfigBounds.boundedInt(
+                getConfig().getInt("death-replay.terrain.environment.max-watched-blocks", ConfigBounds.DEFAULT_TERRAIN_MAX_WATCHED_BLOCKS),
+                ConfigBounds.MIN_TERRAIN_MAX_WATCHED_BLOCKS,
+                ConfigBounds.MAX_TERRAIN_MAX_WATCHED_BLOCKS,
+                ConfigBounds.DEFAULT_TERRAIN_MAX_WATCHED_BLOCKS,
+                "death-replay.terrain.environment.max-watched-blocks",
+                getLogger()
+            );
+            int maxReadsPerTick = ConfigBounds.boundedInt(
+                getConfig().getInt("death-replay.terrain.environment.max-reads-per-tick", ConfigBounds.DEFAULT_TERRAIN_MAX_READS_PER_TICK),
+                ConfigBounds.MIN_TERRAIN_MAX_READS_PER_TICK,
+                ConfigBounds.MAX_TERRAIN_MAX_READS_PER_TICK,
+                ConfigBounds.DEFAULT_TERRAIN_MAX_READS_PER_TICK,
+                "death-replay.terrain.environment.max-reads-per-tick",
+                getLogger()
+            );
+
             replayBlockRecorder = new ReplayBlockRecorder(
                 this, runManager, statsManager, worldSetManager, deathReplayRecorder,
-                getConfig().getInt("death-replay.terrain.capture-radius-blocks", 24),
-                getConfig().getInt("death-replay.terrain.max-changes-per-clip", 1024),
+                terrainRadius,
+                maxChangesPerClip,
                 getConfig().getBoolean("death-replay.terrain.environment.enabled", true),
-                getConfig().getInt("death-replay.terrain.environment.max-watched-blocks", 512),
-                getConfig().getInt("death-replay.terrain.environment.max-reads-per-tick", 128)
+                maxWatchedBlocks,
+                maxReadsPerTick
             );
             getServer().getPluginManager().registerEvents(replayBlockRecorder, this);
             replayBlockRecorder.start();
             deathReplayCaptureService.setBlockRecorder(replayBlockRecorder);
-            getLogger().info("Phase 10 terrain change recorder enabled.");
+            getLogger().info("Death replay terrain change recorder enabled.");
         }
 
-        // Requires the Phase 9B setter in AttemptEndManager.java.
         attemptEndManager.setDeathReplayCaptureService(
             deathReplayCaptureService
         );
 
-        getLogger().info("Phase 9B death replay capture enabled.");
+        getLogger().info("Death replay capture enabled.");
     }
 
     /*
@@ -785,15 +843,14 @@ public final class InstigateHardcore extends JavaPlugin {
             double warningRearm = getConfig().getDouble(
                 "alerts.low-health.warning-rearm-hearts", 6.0
             );
-            // Backward-compatible with existing Phase 10B.2 configurations.
+            // Backward-compatible with existing low-health configurations.
             double critical = getConfig().getDouble(
                 "alerts.low-health.threshold-hearts", 2.0
             );
             double criticalRearm = getConfig().getDouble(
                 "alerts.low-health.rearm-hearts", 3.0
             );
-            if (!(critical > 0.0 && criticalRearm > critical &&
-                    warning > critical && warningRearm > warning)) {
+            if (!ConfigBounds.validLowHealthThresholds(warning, warningRearm, critical, criticalRearm)) {
                 getLogger().warning("Invalid low-health thresholds; using 5/6 and 2/3 hearts.");
                 warning = 5.0;
                 warningRearm = 6.0;
@@ -809,7 +866,14 @@ public final class InstigateHardcore extends JavaPlugin {
             getLogger().info("Global two-stage health alerts enabled.");
         }
         if (getConfig().getBoolean("tab-health.enabled", true)) {
-            int interval = Math.max(1, getConfig().getInt("tab-health.update-interval-ticks", 10));
+            int interval = ConfigBounds.boundedInt(
+                getConfig().getInt("tab-health.update-interval-ticks", ConfigBounds.DEFAULT_TAB_HEALTH_UPDATE_TICKS),
+                ConfigBounds.MIN_TAB_HEALTH_UPDATE_TICKS,
+                ConfigBounds.MAX_TAB_HEALTH_UPDATE_TICKS,
+                ConfigBounds.DEFAULT_TAB_HEALTH_UPDATE_TICKS,
+                "tab-health.update-interval-ticks",
+                getLogger()
+            );
             tabHealthDisplay = new TabHealthDisplay(this, interval);
             tabHealthDisplay.start();
             getLogger().info("Tab player-list hearts enabled.");
@@ -966,7 +1030,7 @@ public final class InstigateHardcore extends JavaPlugin {
         try {
             timing = new ReplayTiming(
                 countdownManager.getDurationSeconds(),
-                getConfig().getInt("death-replay.duration-seconds", 7)
+                replayDurationSeconds
             );
         } catch (IllegalArgumentException exception) {
             getLogger().warning("Automatic replay needs a reset countdown longer "
@@ -986,7 +1050,7 @@ public final class InstigateHardcore extends JavaPlugin {
             deathReplayPlaybackService,
             timing
         );
-        getLogger().info("Phase 9E automatic death replay enabled: "
+        getLogger().info("Automatic death replay enabled: "
             + timing.replaySeconds() + "s replay + "
             + timing.bufferSeconds() + "s reset buffer.");
     }
@@ -1025,12 +1089,19 @@ public final class InstigateHardcore extends JavaPlugin {
             replayDebugPreviewCommand.setBlockRecorder(replayBlockRecorder);
         }
         command.setExecutor(replayDebugPreviewCommand);
+        command.setTabCompleter(replayDebugPreviewCommand);
         getServer().getPluginManager().registerEvents(
             replayDebugPreviewCommand,
             this
         );
 
-        getLogger().info("Phase 9D replay preview command registered.");
+        boolean previewEnabled =
+            getConfig().getBoolean("death-replay.debug-preview-enabled", false);
+        getLogger().info(
+            previewEnabled
+                ? "Replay debug preview command registered and enabled."
+                : "Replay debug preview command registered (disabled by config)."
+        );
     }
 
     /*
@@ -1053,13 +1124,11 @@ public final class InstigateHardcore extends JavaPlugin {
             } catch (
                 IOException exception
             ) {
-                getLogger().severe(
-                    "Failed to register online player "
-                        + player.getName()
-                        + "."
+                getLogger().log(
+                    Level.SEVERE,
+                    "Failed to register online player " + player.getName() + ".",
+                    exception
                 );
-
-                exception.printStackTrace();
             }
 
             if (
@@ -1079,13 +1148,11 @@ public final class InstigateHardcore extends JavaPlugin {
                 } catch (
                     IOException exception
                 ) {
-                    getLogger().severe(
-                        "Failed to record participation for "
-                            + player.getName()
-                            + "."
+                    getLogger().log(
+                        Level.SEVERE,
+                        "Failed to record participation for " + player.getName() + ".",
+                        exception
                     );
-
-                    exception.printStackTrace();
                 }
 
                 telemetryManager.beginSession(

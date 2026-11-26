@@ -475,6 +475,66 @@ public final class AttemptParticipantManager {
     }
 
     /**
+     * Ensures {@code attempt} exists and records all supplied participants
+     * in a single atomic save. Used during world rotation to avoid writing
+     * {@code attempt-participants.properties} once per online player.
+     */
+    public synchronized int recordParticipants(
+        int attempt,
+        Map<UUID, String> entries
+    ) throws IOException {
+        validateAttempt(attempt);
+        Objects.requireNonNull(entries);
+
+        boolean changed = false;
+        Map<UUID, AttemptParticipant> participants =
+            participantsByAttempt.get(attempt);
+        if (participants == null) {
+            participants = new HashMap<>();
+            participantsByAttempt.put(attempt, participants);
+            changed = true;
+        }
+
+        long now = Instant.now().toEpochMilli();
+        int newlyAdded = 0;
+
+        for (Map.Entry<UUID, String> entry : entries.entrySet()) {
+            UUID uuid = Objects.requireNonNull(entry.getKey());
+            String name = Objects.requireNonNull(entry.getValue());
+            if (name.isBlank()) {
+                throw new IllegalArgumentException(
+                    "Participant name cannot be blank."
+                );
+            }
+
+            AttemptParticipant existing = participants.get(uuid);
+            if (existing != null) {
+                if (!existing.name().equals(name)) {
+                    participants.put(
+                        uuid,
+                        new AttemptParticipant(uuid, name, existing.firstJoinedAt())
+                    );
+                    changed = true;
+                }
+                continue;
+            }
+
+            participants.put(
+                uuid,
+                new AttemptParticipant(uuid, name, now)
+            );
+            newlyAdded++;
+            changed = true;
+        }
+
+        if (changed) {
+            save();
+        }
+
+        return newlyAdded;
+    }
+
+    /**
      * Returns the participants for one attempt in the order they
      * first entered it.
      */
