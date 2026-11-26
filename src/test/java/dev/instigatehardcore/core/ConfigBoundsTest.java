@@ -5,6 +5,12 @@ import org.junit.jupiter.api.Test;
 
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -32,8 +38,12 @@ class ConfigBoundsTest {
             "Normal Deathcam playback must stay enabled by default"
         );
         assertFalse(
-            config.getBoolean("death-replay.cinematic.resource-pack-hud-enabled", true),
-            "Experimental resource-pack HUD must stay disabled by default"
+            config.contains(ConfigBounds.DEPRECATED_RESOURCE_PACK_HUD_KEY),
+            "Retired resource-pack HUD option must not be present in shipped config.yml"
+        );
+        assertFalse(
+            ConfigBounds.warnIfDeprecatedResourcePackHudEnabled(config, null),
+            "Fresh config must not trigger deprecated resource-pack HUD warning"
         );
         assertTrue(
             ConfigBounds.resolveReplayAudioEnabled(config),
@@ -82,5 +92,37 @@ class ConfigBoundsTest {
 
         YamlConfiguration empty = new YamlConfiguration();
         assertTrue(ConfigBounds.resolveReplayAudioEnabled(empty));
+    }
+
+    @Test
+    void deprecatedResourcePackHudLogsSingleWarningOnlyWhenEnabled() {
+        Logger logger = Logger.getLogger("ConfigBoundsTest-" + System.nanoTime());
+        logger.setUseParentHandlers(false);
+        List<LogRecord> records = new ArrayList<>();
+        logger.addHandler(new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                records.add(record);
+            }
+
+            @Override
+            public void flush() { }
+
+            @Override
+            public void close() { }
+        });
+
+        YamlConfiguration legacyFalse = new YamlConfiguration();
+        legacyFalse.set(ConfigBounds.DEPRECATED_RESOURCE_PACK_HUD_KEY, false);
+        assertFalse(ConfigBounds.warnIfDeprecatedResourcePackHudEnabled(legacyFalse, logger));
+        assertTrue(records.isEmpty());
+
+        YamlConfiguration legacyTrue = new YamlConfiguration();
+        legacyTrue.set(ConfigBounds.DEPRECATED_RESOURCE_PACK_HUD_KEY, true);
+        assertTrue(ConfigBounds.warnIfDeprecatedResourcePackHudEnabled(legacyTrue, logger));
+        assertEquals(1, records.size());
+        assertEquals(Level.WARNING, records.getFirst().getLevel());
+        assertTrue(records.getFirst().getMessage().contains(ConfigBounds.DEPRECATED_RESOURCE_PACK_HUD_KEY));
+        assertTrue(records.getFirst().getMessage().contains("standard Deathcam renderer"));
     }
 }
