@@ -19,7 +19,6 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -183,29 +182,59 @@ public final class DeathReplayRecorder {
         buffers.keySet().retainAll(online);
     }
 
-    private void capturePlayer(Player subject, int attempt) {
-        List<ReplayActorSnapshot> actors = new ArrayList<>(maxActorsPerFrame);
-        actors.add(toSnapshot(subject));
+    private record NearbyCandidate(Entity entity, Location location, double distanceSquared) {
+    }
 
-        List<Entity> nearby = subject.getNearbyEntities(radius, radius, radius);
-        nearby.stream()
-            .filter(entity -> entity instanceof LivingEntity
-                || entity instanceof Projectile || entity instanceof Item)
-            .filter(entity -> !entity.isDead())
-            .filter(entity -> !(entity instanceof Player other
-                && other.getGameMode() != GameMode.SURVIVAL))
-            .filter(entity -> entity.getLocation().distanceSquared(subject.getLocation())
-                <= (double) radius * radius)
-            .sorted(Comparator.comparingDouble(entity ->
-                entity.getLocation().distanceSquared(subject.getLocation())))
-            .limit(maxActorsPerFrame - 1L)
-            .map(this::toSnapshot)
-            .forEach(actors::add);
+    private void capturePlayer(Player subject, int attempt) {
+        Location subjectLocation = subject.getLocation();
+        double sx = subjectLocation.getX();
+        double sy = subjectLocation.getY();
+        double sz = subjectLocation.getZ();
+        double radiusSquared = (double) radius * radius;
+
+        List<ReplayActorSnapshot> actors = new ArrayList<>(maxActorsPerFrame);
+        actors.add(toSnapshot(subject, subjectLocation));
+
+        int remainingSlots = maxActorsPerFrame - 1;
+        if (remainingSlots > 0) {
+            List<Entity> nearby = subject.getNearbyEntities(radius, radius, radius);
+            List<NearbyCandidate> candidates = new ArrayList<>(Math.min(nearby.size(), maxActorsPerFrame));
+            for (Entity entity : nearby) {
+                if (!(entity instanceof LivingEntity
+                    || entity instanceof Projectile
+                    || entity instanceof Item)) {
+                    continue;
+                }
+                if (entity.isDead()) {
+                    continue;
+                }
+                if (entity instanceof Player other && other.getGameMode() != GameMode.SURVIVAL) {
+                    continue;
+                }
+                Location entityLocation = entity.getLocation();
+                double dx = entityLocation.getX() - sx;
+                double dy = entityLocation.getY() - sy;
+                double dz = entityLocation.getZ() - sz;
+                double distSq = dx * dx + dy * dy + dz * dz;
+                if (distSq <= radiusSquared) {
+                    candidates.add(new NearbyCandidate(entity, entityLocation, distSq));
+                }
+            }
+
+            if (candidates.size() > 1) {
+                candidates.sort((a, b) -> Double.compare(a.distanceSquared(), b.distanceSquared()));
+            }
+            int limit = Math.min(remainingSlots, candidates.size());
+            for (int i = 0; i < limit; i++) {
+                NearbyCandidate candidate = candidates.get(i);
+                actors.add(toSnapshot(candidate.entity(), candidate.location()));
+            }
+        }
 
         ReplayFrame frame = new ReplayFrame(
             sampleTick,
             attempt,
-            subject.getWorld().getUID(),
+            subjectLocation.getWorld().getUID(),
             subject.getUniqueId(),
             actors
         );
@@ -214,8 +243,7 @@ public final class DeathReplayRecorder {
         ).append(frame);
     }
 
-    private ReplayActorSnapshot toSnapshot(Entity entity) {
-        Location location = entity.getLocation();
+    private ReplayActorSnapshot toSnapshot(Entity entity, Location location) {
         LivingEntity living = entity instanceof LivingEntity le ? le : null;
         Player player = entity instanceof Player p ? p : null;
         EntityEquipment equipment = living == null ? null : living.getEquipment();
@@ -236,16 +264,32 @@ public final class DeathReplayRecorder {
                 materialName(equipment.getBoots())
             );
 
+        org.bukkit.World world = location.getWorld();
+        int blockX = location.getBlockX();
+        int blockY = location.getBlockY();
+        int blockZ = location.getBlockZ();
+
         // Ground type is recorded at capture time, not reconstructed from the
-        // later world state. Only players need movement dust in Phase 9F.3.
+        // later world state. Only players need movement dust.
         boolean onGround = player != null && player.isOnGround();
         String groundMaterial = "AIR";
-        if (onGround) {
-            groundMaterial = location.getWorld().getBlockAt(
-                location.getBlockX(),
+        if (onGround && world != null) {
+            groundMaterial = world.getBlockAt(
+                blockX,
                 (int) Math.floor(location.getY() - 0.12),
-                location.getBlockZ()
+                blockZ
             ).getType().name();
+        }
+
+        boolean burning = entity.getFireTicks() > 0;
+        if (!burning && world != null) {
+            String feetBlock = world.getBlockAt(blockX, blockY, blockZ).getType().name();
+            if (ReplayFireVisualState.isBurning(false, feetBlock, "AIR")) {
+                burning = true;
+            } else {
+                String torsoBlock = world.getBlockAt(blockX, blockY + 1, blockZ).getType().name();
+                burning = ReplayFireVisualState.isBurning(false, "AIR", torsoBlock);
+            }
         }
 
         ReplayCreeperState creeperState = entity instanceof Creeper creeper
@@ -264,11 +308,7 @@ public final class DeathReplayRecorder {
             location.getYaw(), location.getPitch(),
             player != null && player.isSneaking(),
             living != null && living.isGliding(),
-            ReplayFireVisualState.isBurning(
-                entity.getFireTicks() > 0,
-                location.getBlock().getType().name(),
-                location.clone().add(0.0, 1.0, 0.0).getBlock().getType().name()
-            ),
+            burning,
             living != null ? living.getHealth() : -1.0,
             visualEquipment,
             player != null && player.isSprinting(),
