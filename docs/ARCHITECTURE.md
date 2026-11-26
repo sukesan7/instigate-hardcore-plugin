@@ -10,7 +10,7 @@ The core rule is simple:
 
 The plugin implements that rule with a rotating world pipeline, hardened world-deletion safeguards, persistent attempt state, crash/interrupted-rotation recovery, per-player telemetry, participation tracking, an optional packet-only seven-second Deathcam (via PacketEvents), quality-of-life monitors, and a compact command/diagnostics surface.
 
-Built for **Instigate Cafe** and designed to work cleanly on any standard Paper `26.3` server. The project is feature-complete and in **maintenance mode** (`v1.0.4`).
+Built for **Instigate Cafe** and designed to work cleanly on any standard Paper `26.3` server. The project is feature-complete and in **maintenance mode** (`v1.0.5`).
 
 ---
 
@@ -217,8 +217,7 @@ Before unloading and again after unloading (and before deleting on the async thr
 Located in `dev.instigatehardcore.replay`:
 
 - **Capture (`DeathReplayRecorder`, `ReplayCombatRecorder`, `ReplayBlockRecorder`, `DeathReplayCaptureService`):** Main-thread-only bounded rolling buffers capturing Survival players, nearby entities, equipment, movement/fire/creeper state, combat animations, explosions, and optional block/environment changes within configured bounds.
-- **Playback (`DeathReplayPlaybackService`, `ReplayPacketActorTransport`, `ReplayCinematicView`, `ReplayTerrainOverlay`):** Packet-only rendering via optional PacketEvents `2.14.0`. Hides live conflicting entities per viewer, spawns temporary ghost actors, renders optional client-only terrain overrides, and tracks the victim with a packet-only cinematic marker camera. Every viewer resource is torn down transactionally on completion, error, quit, or disable.
-- **Experimental resource-pack HUD (`ResourcePackReplayHud`):** Opt-in via `death-replay.cinematic.resource-pack-hud-enabled` (default `false`); no resource pack is bundled.
+- **Playback (`DeathReplayPlaybackService`, `ReplayPacketActorTransport`, `ReplayCinematicView`, `ReplayCinematicHudText`, `ReplayTerrainOverlay`):** Packet-only rendering via optional PacketEvents `2.14.0`. Hides live conflicting entities per viewer, spawns temporary ghost actors, renders optional client-only terrain overrides, tracks the victim with a packet-only cinematic marker camera, and presents standard Minecraft Adventure HUD elements (purple progress boss bar, `DEATHCAM` title + victim name, and action-bar countdown timer) with no custom fonts or external resource packs required. Legacy configs containing the retired `death-replay.cinematic.resource-pack-hud-enabled` key are ignored (logging a single startup warning if set to `true`). Every viewer resource is torn down transactionally on completion, error, quit, dimension change, or disable.
 - **Operator debug preview (`ReplayDebugPreviewCommand`):** `/hcreplaytest <player> [pov|cinematic]` requires `instigatehardcore.debug`, `death-replay.debug-preview-enabled: true` (default `false`), PacketEvents, spectator mode, and proximity within 48 blocks.
 
 ---

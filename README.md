@@ -8,9 +8,9 @@
 
 A shared hardcore survival plugin for Minecraft Paper servers. Play together across all three dimensions, survive as long as you can, and start a fresh attempt automatically when someone dies.
 
-**v1.0.4 (Maintenance Mode)** · **Paper 26.3** · **Java 25** · **PacketEvents 2.14.0** (optional, for Deathcam) · **No client mods**
+**v1.0.5 (Maintenance Mode)** · **Paper 26.3** · **Java 25** · **PacketEvents 2.14.0** (optional, for Deathcam) · **No client mods**
 
-[How it works](#how-it-works) · [Features](#features) · [Gallery](#gallery) · [Installation](#installation) · [Commands](#commands) · [Configuration](#configuration) · [Upgrading](#upgrading-from-v100v103) · [Security](SECURITY.md)
+[How it works](#how-it-works) · [Features](#features) · [Gallery](#gallery) · [Installation](#installation) · [Commands](#commands) · [Configuration](#configuration) · [Upgrading](#upgrading-from-v100v104) · [Security](SECURITY.md)
 
 > [!NOTE]
 > Instigate Hardcore has completed its planned gameplay scope and is now in **maintenance mode**. Future updates focus on security, data-safety hardening, stability, and critical bug fixes rather than new gameplay features.
@@ -115,7 +115,7 @@ Each attempt has an isolated **Overworld, Nether, and End** sharing one attempt 
 
 ### Setup
 
-1. Download `InstigateHardcore-1.0.4.jar` from [Releases](https://github.com/sukesan7/instigate-hardcore-plugin/releases), or [build it from source](#development).
+1. Download `InstigateHardcore-1.0.5.jar` from [Releases](https://github.com/sukesan7/instigate-hardcore-plugin/releases), or [build it from source](#development).
 2. Place the JAR into your Paper server's `plugins/` directory. Install the matching PacketEvents `2.14.0` server plugin there too if you want rendered Deathcam playback.
 3. Start and stop the server once to generate `plugins/InstigateHardcore/config.yml`.
 4. Review `plugins/InstigateHardcore/config.yml` — especially **`worlds.lobby-world`** — then start the server normally (do not use `/reload`).
@@ -201,7 +201,6 @@ death-replay:
   cinematic:
     enabled: true
     hide-scoreboard: true
-    resource-pack-hud-enabled: false # EXPERIMENTAL — see below
   terrain:
     enabled: true
     capture-radius-blocks: 24      # allowed: 1..64
@@ -215,21 +214,17 @@ worlds:
 
 See [`src/main/resources/config.yml`](src/main/resources/config.yml) for the complete shipped configuration file. Invalid or out-of-range numeric settings log a startup warning and fall back to safe defaults rather than failing startup.
 
-### Experimental functionality
+### Upgrading from `v1.0.0`–`v1.0.4`
 
-- **`death-replay.cinematic.resource-pack-hud-enabled` (default `false`):** Experimental custom-font HUD layout for Deathcam playback. No resource pack is bundled with this plugin; enabling this option without serving a matching client resource pack will render placeholder font glyphs instead of the standard vanilla bossbar/title HUD. Keep disabled in standard installations.
-
-### Upgrading from `v1.0.0`–`v1.0.3`
-
-Because Paper's `saveDefaultConfig()` preserves your existing `plugins/InstigateHardcore/config.yml` across upgrades, existing installations should manually apply the safer `v1.0.4` defaults:
+Because Paper's `saveDefaultConfig()` preserves your existing `plugins/InstigateHardcore/config.yml` across upgrades, existing installations should review their settings when upgrading to `v1.0.5`:
 
 1. **Back up** your server directory and `plugins/InstigateHardcore/` data files before upgrading.
-2. In `plugins/InstigateHardcore/config.yml`, set **`death-replay.debug-preview-enabled: false`** (earlier releases shipped with `true`).
-3. Confirm **`death-replay.cinematic.resource-pack-hud-enabled: false`** remains disabled.
-4. Optional cleanup: earlier `config.yml` files indented `audio.enabled` under `death-replay.terrain.audio.enabled`; `v1.0.4` reads `death-replay.audio.enabled` and remains backwards-compatible with the legacy nested key.
+2. In `plugins/InstigateHardcore/config.yml`, ensure **`death-replay.debug-preview-enabled: false`** (releases prior to `v1.0.4` shipped with `true`).
+3. Legacy configurations that still contain **`death-replay.cinematic.resource-pack-hud-enabled`** (including `true`) are **safely ignored** — the unfinished custom resource-pack HUD has been retired, a single startup warning is logged if it was set to `true`, and Deathcam always uses the standard vanilla-compatible Adventure renderer. You may optionally remove that deprecated key from your `config.yml`.
+4. Optional cleanup: earlier `config.yml` files indented `audio.enabled` under `death-replay.terrain.audio.enabled`; the plugin reads `death-replay.audio.enabled` and remains backwards-compatible with the legacy nested key.
 5. Verify `worlds.lobby-world` points to your permanent lobby world and numeric settings fall within documented bounds (`reset.countdown-seconds: 1..600`, `worlds.preload-radius-chunks: 0..8`).
-6. Replace the plugin JAR with `InstigateHardcore-1.0.4.jar` and perform a full server restart.
-   - Active and standby worlds listed in your existing `world-state.properties` will automatically receive `.instigatehardcore-owner.properties` ownership markers on startup so future rotations can clean them up safely.
+6. Replace the plugin JAR with `InstigateHardcore-1.0.5.jar` and perform a full server restart.
+   - Active and standby worlds listed in your existing `world-state.properties` automatically receive `.instigatehardcore-owner.properties` ownership markers if not yet migrated, so future rotations can clean them up safely.
    - Any older orphaned or unrelated world folders on disk are never claimed or deleted automatically.
 
 The plugin stores persistent data under `plugins/InstigateHardcore/` (`stats.properties`, `attempt-participants.properties`, `player-telemetry.yml`, `world-state.properties`). Normal restarts preserve these records. Administrative resets use the normal countdown rather than Deathcam.

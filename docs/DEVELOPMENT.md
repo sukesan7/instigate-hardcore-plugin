@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the build, supply-chain verification, and testing workflow for **Instigate Hardcore** (`v1.0.4`, maintenance mode).
+This document describes the build, supply-chain verification, and testing workflow for **Instigate Hardcore** (`v1.0.5`, maintenance mode).
 
 The project is a Java `25` Paper `26.3` plugin built with Gradle.
 
@@ -117,7 +117,7 @@ Always inspect the resulting diff in `gradle/verification-metadata.xml` before c
 Shipped defaults live in `src/main/resources/config.yml`, and numeric bounds are enforced centrally in `dev.instigatehardcore.core.ConfigBounds`:
 
 - `death-replay.debug-preview-enabled` defaults to **`false`** for production safety.
-- `death-replay.cinematic.resource-pack-hud-enabled` defaults to **`false`** (experimental; requires a separate external resource pack).
+- The deprecated `death-replay.cinematic.resource-pack-hud-enabled` key has been removed from shipped `config.yml` and is safely ignored (with a single startup warning if left `true` in a legacy config). Deathcam always renders standard Adventure components.
 - Numeric limits (`reset.countdown-seconds: 1..600`, `worlds.preload-radius-chunks: 0..8`, scoreboard/TAB intervals, replay capture/terrain caps, and low-health heart thresholds) warn and fall back to safe defaults rather than failing startup.
 - `plugin.yml` defines `/hardcore` (`/hc`) and `/hcreplaytest` along with `instigatehardcore.command` (`true`), `instigatehardcore.admin` (`op`), and `instigatehardcore.debug` (`op`).
 
@@ -135,7 +135,7 @@ Coverage includes:
 - **Configuration & core lifecycle (`core/`):** Production-safe defaults in shipped `config.yml`, numeric config bounds, low-health threshold validation, replay audio config compatibility, and `RunManager` transitions.
 - **Player reset & insomnia (`player/`, `listener/`):** Full player state reset and `Statistic.TIME_SINCE_REST` phantom-insomnia reset on new attempts and joins.
 - **Persistence (`stats/`, `participation/`, `telemetry/`):** Atomic persistence, batch participant recording, rename handling, attempts-played counts, empty attempt retention, playtime sessions/checkpoints/shutdown, and death telemetry history.
-- **Deathcam & QoL (`replay/`, `qol/`):** Rolling buffers, actor scene reconstruction, camera path/motion/HUD, combat/explosion/terrain/environment timelines, low-health alert policies, and heart display formatting.
+- **Deathcam & QoL (`replay/`, `qol/`):** Rolling buffers, actor scene reconstruction, camera path/motion, standard Adventure HUD rendering & cleanup (`ReplayCinematicHudTextTest`, `ReplayCinematicViewTest`, verifying zero custom fonts/private-use glyphs even under legacy configs), combat/explosion/terrain/environment timelines, low-health alert policies, and heart display formatting.
 
 ---
 
