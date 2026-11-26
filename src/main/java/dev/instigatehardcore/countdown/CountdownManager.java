@@ -32,9 +32,9 @@ public final class CountdownManager {
                 plugin
             );
 
-        if (durationSeconds < 1) {
+        if (durationSeconds < 1 || durationSeconds > 600) {
             throw new IllegalArgumentException(
-                "Countdown duration must be at least one second."
+                "Countdown duration must be between 1 and 600 seconds."
             );
         }
 

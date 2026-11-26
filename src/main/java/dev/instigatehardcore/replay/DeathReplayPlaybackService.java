@@ -1,5 +1,6 @@
 package dev.instigatehardcore.replay;
 
+import dev.instigatehardcore.core.ConfigBounds;
 import dev.instigatehardcore.ui.InstigateTheme;
 
 import net.kyori.adventure.text.Component;
@@ -433,7 +434,7 @@ public final class DeathReplayPlaybackService implements AutoCloseable {
                         }
                     }
                     newTransport = new ReplayPacketActorTransport(player, scene.worldId(),
-                        plugin.getConfig().getBoolean("death-replay.audio.enabled", true));
+                        ConfigBounds.resolveReplayAudioEnabled(plugin.getConfig()));
                     this.playback = new ReplayActorPlayback(
                         scene, newTransport, visualEvents, explosions,
                         plugin.getConfig().getBoolean("death-replay.visuals.movement-particles", true),

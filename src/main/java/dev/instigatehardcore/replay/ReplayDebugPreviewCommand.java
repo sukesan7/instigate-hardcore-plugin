@@ -1,11 +1,14 @@
 package dev.instigatehardcore.replay;
 
+import dev.instigatehardcore.core.ConfigBounds;
+
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Item;
@@ -18,6 +21,7 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -26,12 +30,13 @@ import java.util.logging.Level;
 
 /**
  * Opt-in operator preview while the attempt is ACTIVE. Safe independent testing
- * of 9D packets; it does not end an attempt or change the 8F death lifecycle.
+ * of replay packets; it does not end an attempt or change the death lifecycle.
  *
- * Usage: /hcreplaytest <survival-player> [pov]
+ * Usage: /hcreplaytest <survival-player> [pov|cinematic]
  * The command issuer must be SPECTATOR within 48 blocks of the target.
  */
-public final class ReplayDebugPreviewCommand implements CommandExecutor, Listener, AutoCloseable {
+public final class ReplayDebugPreviewCommand
+    implements CommandExecutor, TabCompleter, Listener, AutoCloseable {
     private final JavaPlugin plugin;
     private final DeathReplayRecorder recorder;
     private final ReplayCombatRecorder combatRecorder;
@@ -75,7 +80,7 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             this.cinematicMode = cinematicMode;
             this.victimId = scene.death().victimId();
             this.transport = new ReplayPacketActorTransport(viewer, scene.worldId(),
-                plugin.getConfig().getBoolean("death-replay.audio.enabled", true));
+                ConfigBounds.resolveReplayAudioEnabled(plugin.getConfig()));
             this.terrain = blockChanges.isEmpty() ? null : new ReplayTerrainOverlay(
                 viewer, scene, blockChanges, plugin.getConfig().getInt(
                     "death-replay.terrain.max-block-packets-per-tick", 128));
@@ -298,6 +303,35 @@ public final class ReplayDebugPreviewCommand implements CommandExecutor, Listene
             viewer.sendMessage("Replay preview could not start; check server logs.");
         }
         return true;
+    }
+
+    @Override
+    public List<String> onTabComplete(
+        CommandSender sender,
+        Command command,
+        String alias,
+        String[] args
+    ) {
+        if (!sender.hasPermission("instigatehardcore.debug")
+            || !plugin.getConfig().getBoolean("death-replay.debug-preview-enabled", false)) {
+            return List.of();
+        }
+        if (args.length == 1) {
+            String prefix = args[0].toLowerCase(Locale.ROOT);
+            return Bukkit.getOnlinePlayers().stream()
+                .filter(p -> p.getGameMode() == GameMode.SURVIVAL)
+                .map(Player::getName)
+                .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(prefix))
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+        }
+        if (args.length == 2) {
+            String prefix = args[1].toLowerCase(Locale.ROOT);
+            return List.of("pov", "cinematic").stream()
+                .filter(opt -> opt.startsWith(prefix))
+                .toList();
+        }
+        return List.of();
     }
 
     @EventHandler

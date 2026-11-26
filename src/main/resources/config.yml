@@ -21,12 +21,17 @@ scoreboard:
 death-replay:
   enabled: true
   automatic-playback-enabled: true
-  debug-preview-enabled: true
+  # Production default: disabled. Enable only for operator/developer testing
+  # of /hcreplaytest in spectator mode.
+  debug-preview-enabled: false
 
   duration-seconds: 7
   capture-interval-ticks: 2
   capture-radius-blocks: 24
   max-actors-per-frame: 48
+
+  audio:
+    enabled: true
 
   visuals:
     movement-particles: true
@@ -35,7 +40,8 @@ death-replay:
   cinematic:
     enabled: true
     hide-scoreboard: true
-    # Turn on only for viewers who have the matching resource pack.
+    # Experimental: requires a matching client resource pack that is NOT
+    # bundled with this plugin. Keep disabled unless all viewers use that pack.
     resource-pack-hud-enabled: false
 
   camera:
@@ -56,9 +62,6 @@ death-replay:
       enabled: true
       max-watched-blocks: 512
       max-reads-per-tick: 128
-
-    audio:
-      enabled: true
 
 worlds:
   # Permanent safety/fallback world.

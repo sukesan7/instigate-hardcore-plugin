@@ -48,6 +48,10 @@ public final class HardcoreTabCompleter
             args
         );
 
+        if (!sender.hasPermission("instigatehardcore.command")) {
+            return List.of();
+        }
+
         /*
          * /hc <TAB>
          */

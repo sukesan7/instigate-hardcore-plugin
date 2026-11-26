@@ -32,6 +32,7 @@ import java.io.IOException;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.logging.Level;
 
 public final class AttemptEndManager {
 
@@ -312,13 +313,11 @@ public final class AttemptEndManager {
         } catch (
             IOException exception
         ) {
-            plugin.getLogger().severe(
-                "Failed to persist playtime when attempt #"
-                    + attempt
-                    + " ended."
+            plugin.getLogger().log(
+                Level.SEVERE,
+                "Failed to persist playtime when attempt #" + attempt + " ended.",
+                exception
             );
-
-            exception.printStackTrace();
         }
     }
 
@@ -348,13 +347,11 @@ public final class AttemptEndManager {
         } catch (
             IOException exception
         ) {
-            plugin.getLogger().severe(
-                "Failed to persist death statistics for "
-                    + player.getName()
-                    + "."
+            plugin.getLogger().log(
+                Level.SEVERE,
+                "Failed to persist death statistics for " + player.getName() + ".",
+                exception
             );
-
-            exception.printStackTrace();
         }
 
         try {
@@ -372,13 +369,11 @@ public final class AttemptEndManager {
         } catch (
             IOException exception
         ) {
-            plugin.getLogger().severe(
-                "Failed to persist structured death telemetry for "
-                    + player.getName()
-                    + "."
+            plugin.getLogger().log(
+                Level.SEVERE,
+                "Failed to persist structured death telemetry for " + player.getName() + ".",
+                exception
             );
-
-            exception.printStackTrace();
         }
 
         return totalDeaths;

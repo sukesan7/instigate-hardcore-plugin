@@ -148,6 +148,11 @@ public final class HardcoreCommand
         String label,
         String[] args
     ) {
+        if (!sender.hasPermission("instigatehardcore.command")) {
+            sendNoPermission(sender);
+            return true;
+        }
+
         if (args.length == 0) {
             sendHelp(
                 sender
@@ -396,8 +401,15 @@ public final class HardcoreCommand
             statsManager
                 .getCurrentAttempt();
 
+        long now =
+            System.currentTimeMillis();
+
+        resetConfirmations.values().removeIf(
+            existing -> now > existing.expiresAt()
+        );
+
         long expiresAt =
-            System.currentTimeMillis()
+            now
                 + RESET_CONFIRMATION_WINDOW_MILLIS;
 
         resetConfirmations.put(

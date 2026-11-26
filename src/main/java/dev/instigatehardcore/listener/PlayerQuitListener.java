@@ -11,6 +11,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
 import java.util.Objects;
+import java.util.logging.Level;
 
 public final class PlayerQuitListener implements Listener {
 
@@ -48,13 +49,13 @@ public final class PlayerQuitListener implements Listener {
         } catch (
             IOException exception
         ) {
-            plugin.getLogger().severe(
+            plugin.getLogger().log(
+                Level.SEVERE,
                 "Failed to close telemetry session for "
                     + player.getName()
-                    + " during disconnect."
+                    + " during disconnect.",
+                exception
             );
-
-            exception.printStackTrace();
         }
     }
 }
