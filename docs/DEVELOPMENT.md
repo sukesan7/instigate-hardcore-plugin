@@ -2,869 +2,192 @@
 
 ## Overview
 
-This document describes the local development workflow for **Instigate Hardcore**.
+This document describes the build, supply-chain verification, and testing workflow for **Instigate Hardcore** (`v1.0.4`, maintenance mode).
 
-The project is a Paper plugin written in Java and built with Gradle.
-
-The normal workflow is:
+The project is a Java `25` Paper `26.3` plugin built with Gradle.
 
 ```text
 edit
   ↓
-unit tests
+unit & security tests (./gradlew clean test)
   ↓
-build
+verified build (./gradlew clean build)
   ↓
-run local Paper server
+disposable local Paper server (./gradlew runServer)
   ↓
-manual regression
+manual regression checklist
   ↓
-commit
+coherent commit
 ```
 
-The local Paper server is disposable development infrastructure.
-
-Do not use a production server as the primary test environment for world-rotation changes.
+`server/` is disposable local development infrastructure and is excluded from Git (except `server/.gitkeep`). **Never test world-rotation or cleanup changes against production worlds.**
 
 ---
 
-# Current Toolchain
+## Supported Toolchain
 
-The project currently targets:
+| Component | Version |
+| --- | --- |
+| Minecraft / Paper | `26.3` (`io.papermc.paper:paper-api:26.3.build.157-beta`) |
+| Java toolchain | `25` |
+| Gradle Wrapper | `9.8.0` (SHA-256 verified) |
+| PacketEvents (optional runtime) | `2.14.0` (`compileOnly`) |
+| JUnit | `6.1.2` (Jupiter) |
+| Run-Paper Gradle plugin | `3.1.0` |
 
-```text
-Minecraft / Paper    26.3
-Java toolchain       25
-Gradle Wrapper       9.8.0
-JUnit                6.1.2 / Jupiter
-```
-
-The developer shell may run a newer JDK, but Gradle compiles the project using the configured Java toolchain.
-
-The exact Paper dependency version should remain consistent across compile and test configurations.
+Gradle compiles and runs tests using the configured Java `25` toolchain even if the host shell runs a newer JDK. Keep the `paper-api` version identical between `compileOnly` and `testImplementation`.
 
 ---
 
-# Repository Layout
+## Repository Layout
 
 ```text
 instigate-hardcore/
-├── README.md
-├── LICENSE
+├── .github/workflows/ci.yml      # Read-only Java 25 CI with pinned actions
 ├── .gitignore
-│
+├── LICENSE.md                    # MIT License (packaged into JAR META-INF/)
+├── README.md
+├── SECURITY.md                   # Private vulnerability reporting & safety policy
 ├── build.gradle.kts
 ├── settings.gradle.kts
 ├── gradle.properties
-├── gradlew
-├── gradlew.bat
-│
+├── gradlew / gradlew.bat
 ├── gradle/
+│   ├── verification-metadata.xml # SHA-256 dependency verification lockfile
 │   └── wrapper/
-│
+│       ├── gradle-wrapper.jar
+│       └── gradle-wrapper.properties
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── DEVELOPMENT.md
 │   ├── ROADMAP.md
-│   └── assets/
-│       └── gallery/
-│
-├── scripts/
-├── server/
-│
+│   └── assets/gallery/
+├── server/                       # Disposable local Paper dev server (ignored)
 └── src/
     ├── main/
-    │   ├── java/
-    │   │   └── dev/instigatehardcore/
+    │   ├── java/dev/instigatehardcore/
     │   └── resources/
-    │       ├── plugin.yml
-    │       └── config.yml
-    │
+    │       ├── config.yml
+    │       └── plugin.yml
     └── test/
-        └── java/
-            └── dev/instigatehardcore/
+        ├── java/dev/instigatehardcore/
+        └── resources/
 ```
-
-`server/` is used by the local Paper development server.
-
-Generated server data should not be committed.
 
 ---
 
-# Build Commands
+## Build & Supply-Chain Integrity
 
-## Run Tests
+### Standard Commands
 
 ```bash
+# Run all automated unit and security tests
 ./gradlew clean test
-```
 
-Use this after logic or persistence changes.
-
----
-
-## Build Plugin
-
-```bash
+# Build the release JAR (verifies dependencies and packages META-INF/LICENSE.md)
 ./gradlew clean build
-```
 
-The plugin JAR is written under:
-
-```text
-build/libs/
-```
-
----
-
-## Run Development Server
-
-```bash
+# Start the disposable local Paper 26.3 server (installs PacketEvents 2.14.0)
 ./gradlew runServer
 ```
 
-Use this for world generation, portal testing, death flow, scoreboard rendering, titles, commands, player movement, and crash-recovery testing.
+The release JAR is written to `build/libs/InstigateHardcore-<version>.jar` and contains `META-INF/LICENSE.md`, `plugin.yml`, `config.yml`, and compiled plugin classes only (zero bundled third-party dependencies).
 
----
+### Dependency & Wrapper Verification
 
-# Gradle Dependency Model
-
-Paper should remain server-provided for the actual plugin.
-
-```kotlin
-compileOnly("io.papermc.paper:paper-api:...")
-```
-
-The test suite also uses Paper/Bukkit classes such as `YamlConfiguration`, so tests need the same Paper API on the test runtime classpath:
-
-```kotlin
-testImplementation("io.papermc.paper:paper-api:...")
-```
-
-Do not replace `compileOnly` with `implementation`.
-
-```text
-compileOnly
-    → compile plugin against Paper
-    → Paper server provides API at runtime
-
-testImplementation
-    → JUnit receives Paper/Bukkit classes during tests
-```
-
----
-
-# Configuration
-
-Development defaults are stored in:
-
-```text
-src/main/resources/config.yml
-```
-
-Current major settings:
-
-```yaml
-reset:
-  countdown-seconds: 10
-
-scoreboard:
-  enabled: true
-  update-interval-ticks: 20
-
-worlds:
-  lobby-world: world
-  preload-radius-chunks: 1
-
-debug:
-  enabled: false
-```
-
-When adding configuration:
-
-1. choose a stable key;
-2. provide a safe default;
-3. load it centrally;
-4. validate unsafe values;
-5. update the README if users need to know about it.
-
-Avoid configuration for internal implementation details that should remain deterministic.
-
----
-
-# Plugin Metadata
-
-`plugin.yml` defines the public command and permission surface.
-
-Primary command:
-
-```text
-/hardcore
-```
-
-Alias:
-
-```text
-/hc
-```
-
-Permissions:
-
-```text
-instigatehardcore.command
-instigatehardcore.admin
-instigatehardcore.debug
-```
-
-Do not add `/reload` support.
-
-Hot reloads are not a safe lifecycle for a plugin that owns generated worlds, scheduler tasks, telemetry sessions, scoreboards, attempt state, and recovery metadata.
-
-Use a full server restart.
-
----
-
-# Coding Structure
-
-The project favors small manager/listener classes over one large plugin class.
-
-```text
-main plugin class
-    → lifecycle wiring
-
-manager
-    → owns subsystem state / behavior
-
-listener
-    → translates Bukkit event into subsystem action
-
-record
-    → immutable data model
-```
-
-Avoid putting substantial gameplay behavior directly inside `InstigateHardcore`.
-
----
-
-# UI and Theme
-
-All player-facing styling should use:
-
-```text
-dev.instigatehardcore.ui.InstigateTheme
-```
-
-Do not introduce new legacy hard-coded colors for normal UI.
-
-The intended palette is:
-
-```text
-Azure       primary brand / headings
-Purple      secondary accent / attempts
-Light gray  important values
-Gray        labels
-Muted gray  secondary information
-Soft red    real errors / destructive warnings
-```
-
-Ordinary plugin-originated chat messages should use:
-
-```text
-[Instigate Cafe]
-```
-
-through:
-
-```java
-InstigateTheme.chat(...)
-```
-
-Structured command panels do not need the prefix on every line.
-
-Use the theme helpers instead of duplicating styling logic.
-
----
-
-# User-Facing Text Rules
-
-Keep messages concise, neutral, and consistent with sentence case.
-
-Prefer:
-
-```text
-Attempt #15 has begun. Good luck.
-```
-
-over:
-
-```text
-ATTEMPT #15 HAS STARTED!!!
-```
-
-Technical details belong in server logs and `/hc debug`, not normal player chat.
-
----
-
-# World Naming
-
-Attempt worlds use deterministic names based on attempt number and dimension.
-
-```text
-attempt_000012_overworld
-attempt_000012_nether
-attempt_000012_end
-```
-
-Do not casually change this scheme.
-
-World naming is part of persistence, recovery, cleanup safety, diagnostics, and operator expectations.
-
----
-
-# Persistent Files
-
-Important development data:
-
-```text
-stats.properties
-attempt-participants.properties
-player-telemetry.yml
-world-state.properties
-```
-
-Do not manually edit them during a regression run unless the test specifically requires inconsistent state.
-
-For clean-state testing, stop the server first and remove test data deliberately.
-
----
-
-# Unit Testing
-
-Tests live under:
-
-```text
-src/test/java/dev/instigatehardcore/
-```
-
-## Participation Coverage
-
-Tests should cover:
-
-- unique UUID per attempt;
-- repeated joins do not increase count;
-- latest name updates;
-- first-join timestamp is preserved;
-- multiple attempts count correctly;
-- skipped attempts do not count as played;
-- persistence across reload;
-- empty attempts survive reload.
-
-## Telemetry Coverage
-
-Tests should cover:
-
-- death history persists;
-- newest deaths are returned first;
-- death causes aggregate correctly;
-- same-attempt `beginSession` is idempotent;
-- per-attempt playtime remains separate;
-- ending one attempt closes matching sessions only;
-- checkpoints persist elapsed time;
-- shutdown persists sessions;
-- latest player name persists.
-
----
-
-# Test Design Guidelines
-
-Prefer deterministic tests.
-
-When filesystem behavior is under test, use JUnit temporary directories:
-
-```java
-@TempDir
-Path tempDirectory;
-```
-
-Tests must not write into `server/` or the real plugin data directory.
-
----
-
-# Manual Regression
-
-The unit suite cannot validate Minecraft rendering or the complete world lifecycle.
-
-Before a release candidate, perform the following Paper regression.
-
-## Fresh Startup
-
-Verify:
-
-```text
-ACTIVE world exists
-STANDBY world exists
-/hc debug → Integrity OK
-```
-
-The lobby must remain separate.
-
-## Join Flow
-
-Verify:
-
-```text
-player enters ACTIVE attempt
-player is Survival
-scoreboard appears
-participant count increases only once
-telemetry session begins
-```
-
-Disconnect and reconnect.
-
-The attempt denominator must not duplicate the same UUID.
-
-## Status and Stats
-
-Test:
-
-```text
-/hc
-/hc help
-/hc status
-/hc stats
-/hc stats <player>
-/hc deaths
-```
-
-Check the final azure/purple theme, clickable player names, help interactions, spacing, and absence of visible sidebar score numbers.
-
-## Real Death
-
-Cause a real player death inside the active attempt.
-
-Verify:
-
-```text
-one death ends the attempt
-vanilla death broadcast is suppressed
-[Instigate Cafe] prefix is used
-death cause is recorded
-death total increases exactly once
-telemetry stops
-countdown appears
-```
-
-Expected chat shape:
-
-```text
-[Instigate Cafe] Attempt #N has ended.
-[Instigate Cafe] <death message>
-[Instigate Cafe] <player> now has X total deaths.
-[Instigate Cafe] Next attempt in 10s.
-```
-
-## Countdown
-
-Verify:
-
-```text
-Attempt #N · Resetting in 10s
-```
-
-It should use the smaller subtitle layer.
-
-Check that it updates once per second and clears when rotation begins.
-
-## Rotation
-
-When the countdown completes, verify:
-
-```text
-STANDBY becomes ACTIVE
-old ACTIVE becomes RETIRED
-stats attempt advances once
-all online players move to new attempt
-player state is cleared
-new participation is recorded
-new telemetry sessions begin
-scoreboard updates
-```
-
-Expected message:
-
-```text
-[Instigate Cafe] Attempt #N has begun. Good luck.
-```
-
-## Replacement Standby
-
-Shortly after activation, verify:
-
-```text
-new STANDBY exists
-STANDBY attempt == ACTIVE + 1
-```
-
-Use:
-
-```text
-/hc worlds
-/hc debug
-```
-
-## Retired Cleanup
-
-Verify the old End, Nether, and Overworld unload and are eventually deleted.
-
-The lobby, current active, and current standby must remain untouched.
-
-## Administrative Reset
-
-Run:
-
-```text
-/hc reset
-/hc reset confirm
-```
-
-Verify the attempt ends without adding a player death or structured death record.
-
-A stale confirmation from an older attempt must not reset a newer attempt.
-
-## Restart Persistence
-
-Stop Paper normally and restart.
-
-Verify:
-
-```text
-current attempt persists
-death totals persist
-participation persists
-playtime persists
-latest deaths persist
-ACTIVE/STANDBY pipeline recovers
-/hc debug → Integrity OK
-```
-
----
-
-# Crash-Recovery Testing
-
-Crash recovery should be tested intentionally before major releases or after world-state changes.
-
-Suggested sequence:
-
-1. start a normal attempt;
-2. trigger an attempt end;
-3. let countdown/rotation begin;
-4. terminate the server process during transition;
-5. restart;
-6. inspect `/hc worlds`;
-7. inspect `/hc debug`.
-
-Expected result:
-
-```text
-persisted STANDBY is promoted
-attempt number reconciles
-new STANDBY is created
-persistent phase returns to STABLE
-players re-enter valid ACTIVE gameplay
-```
-
-Do not use graceful `/stop` when specifically testing hard-crash recovery.
-
----
-
-# Debugging Commands
-
-## `/hc worlds`
-
-Inspect:
-
-```text
-ACTIVE
-STANDBY
-RETIRED
-persistent rotation phase
-world names
-attempt numbers
-seeds
-```
-
-## `/hc debug`
-
-Inspect:
-
-```text
-run state
-persistent phase
-stats attempt
-active attempt
-standby attempt
-retired attempt
-countdown
-rotation
-cleanup
-online players
-active players
-participant count
-integrity warnings
-```
-
-Capture both outputs before manually changing persistent data.
-
----
-
-# Server Logs
-
-Runtime failures should include enough context to diagnose lifecycle state.
-
-Prefer logs containing attempt number, player name when relevant, expected value, actual value, and subsystem action.
-
-Example:
-
-```text
-[Instigate Cafe] Standby attempt mismatch. Expected #14 but found #15.
-```
-
-Player chat should remain concise even when server logs are detailed.
-
----
-
-# Scoreboard Development
-
-The scoreboard is intentionally compact.
-
-It prioritizes:
-
-```text
-attempt
-run timer
-death leaderboard
-```
-
-When modifying it:
-
-- stay within the sidebar line limit;
-- keep underlying score entry keys unique;
-- preserve blank visible numeric formatting;
-- verify long player names visually;
-- do not turn the sidebar into a diagnostics panel.
-
----
-
-# Countdown and Titles
-
-Adventure titles provide a main title, subtitle, and timing but not arbitrary percentage font scaling.
-
-The countdown therefore uses only the subtitle layer so it appears smaller.
-
-Exact custom scaling would require a resource pack.
-
-Keep titles limited to lifecycle moments.
-
----
-
-# Adding a New Command
-
-When adding a command:
-
-1. classify it as public, admin, or debug;
-2. add permission handling;
-3. add tab completion;
-4. use `InstigateTheme`;
-5. add it to `/hc help`;
-6. update `plugin.yml` if needed;
-7. update the README if public;
-8. add tests if it changes persistent state.
-
-Commands should not bypass lifecycle managers.
-
----
-
-# Adding Persistent State
-
-Before introducing a new persistent file or field, decide:
-
-- who owns it;
-- when it is written;
-- whether writes must be atomic;
-- how older files migrate;
-- how malformed input is handled;
-- whether crash consistency matters.
-
-Do not create a second source of truth for data already owned elsewhere.
-
----
-
-# Release Regression
-
-Before producing a release JAR:
+1. **Gradle Wrapper:** `gradle/wrapper/gradle-wrapper.properties` pins `distributionSha256Sum` to the official Gradle `9.8.0` checksum, and CI runs `gradle/actions/wrapper-validation`.
+2. **Repository Restrictions:** `build.gradle.kts` uses `exclusiveContent` so Paper (`io.papermc.paper`, `net.md-5`, `com.mojang`) resolves only from PaperMC, PacketEvents (`com.github.retrooper`) resolves only from CodeMC releases (`releasesOnly()`), and everything else resolves from Maven Central (`releasesOnly()`). Snapshot repositories are excluded.
+3. **SHA-256 Dependency Verification:** `gradle/verification-metadata.xml` verifies SHA-256 checksums for all build plugins, compile dependencies, and test dependencies. Only regenerate it when intentionally updating a dependency:
 
 ```bash
-./gradlew clean test
-./gradlew clean build
-./gradlew runServer
+./gradlew --write-verification-metadata sha256 clean test build
 ```
 
-Complete at minimum:
+Always inspect the resulting diff in `gradle/verification-metadata.xml` before committing.
 
-```text
-join
-status
-stats
-death
-countdown
-rotation
-standby regeneration
-cleanup
-admin reset
-restart persistence
-debug integrity
-```
+### Dependency Model
 
-For world-state changes, also complete a hard-crash recovery test.
+- `io.papermc.paper:paper-api` and `com.github.retrooper:packetevents-spigot` must remain `compileOnly` (server-provided at runtime). Do not shade or bundle Paper or PacketEvents into the plugin JAR.
+- `testImplementation` includes `paper-api` so JUnit tests can exercise `YamlConfiguration`, `Statistic`, and Bukkit data models without a live server.
 
 ---
 
-# Gallery Capture
+## Configuration & Plugin Metadata
 
-README screenshots live under:
+Shipped defaults live in `src/main/resources/config.yml`, and numeric bounds are enforced centrally in `dev.instigatehardcore.core.ConfigBounds`:
 
-```text
-docs/assets/gallery/
-```
+- `death-replay.debug-preview-enabled` defaults to **`false`** for production safety.
+- `death-replay.cinematic.resource-pack-hud-enabled` defaults to **`false`** (experimental; requires a separate external resource pack).
+- Numeric limits (`reset.countdown-seconds: 1..600`, `worlds.preload-radius-chunks: 0..8`, scoreboard/TAB intervals, replay capture/terrain caps, and low-health heart thresholds) warn and fall back to safe defaults rather than failing startup.
+- `plugin.yml` defines `/hardcore` (`/hc`) and `/hcreplaytest` along with `instigatehardcore.command` (`true`), `instigatehardcore.admin` (`op`), and `instigatehardcore.debug` (`op`).
 
-Recommended files:
-
-```text
-scoreboard.png
-status.png
-stats.png
-attempt-end.png
-new-attempt.png
-deaths.png
-worlds.png
-```
-
-Before capturing:
-
-- use the final theme;
-- use the same client GUI scale;
-- hide F3/debug overlays;
-- avoid unrelated chat clutter;
-- use realistic test data;
-- keep each image readable.
-
-The README should use only the strongest screenshots.
+Do not add `/reload` support. Full server restarts are required for a plugin managing live worlds, async cleanup, scheduler tasks, telemetry, and recovery state.
 
 ---
 
-# Git Workflow
+## Automated Tests
 
-Typical checkpoint:
+Automated tests under `src/test/java/dev/instigatehardcore/` use JUnit `6.1.2` and `@TempDir` for filesystem isolation (tests must never write to `server/` or live server paths).
 
-```bash
-git add .
-git commit -m "feat: describe change"
-git push
-```
+Coverage includes:
 
-Useful prefixes:
-
-```text
-feat:
-fix:
-test:
-docs:
-refactor:
-chore:
-```
-
-Prefer small commits aligned to one coherent change.
+- **World safety & recovery (`world/`):** Canonical containment, Paper `26.3` nested dimension layout and flat layout deletion, ownership-marker creation/verification/safe legacy migration, refusal to claim unrelated pre-existing directories, symlink rejection (target, ancestor, marker, nested symlink), protection of container/lobby/vanilla/active/standby/loaded/plugin-data directories, interrupted `ROTATING` recovery, and state-store validation.
+- **Configuration & core lifecycle (`core/`):** Production-safe defaults in shipped `config.yml`, numeric config bounds, low-health threshold validation, replay audio config compatibility, and `RunManager` transitions.
+- **Player reset & insomnia (`player/`, `listener/`):** Full player state reset and `Statistic.TIME_SINCE_REST` phantom-insomnia reset on new attempts and joins.
+- **Persistence (`stats/`, `participation/`, `telemetry/`):** Atomic persistence, batch participant recording, rename handling, attempts-played counts, empty attempt retention, playtime sessions/checkpoints/shutdown, and death telemetry history.
+- **Deathcam & QoL (`replay/`, `qol/`):** Rolling buffers, actor scene reconstruction, camera path/motion/HUD, combat/explosion/terrain/environment timelines, low-health alert policies, and heart display formatting.
 
 ---
 
-# Release Preparation
+## Paper Development-Server Regression Checklist
 
-Before the first stable release:
+Automated unit tests cannot validate live Minecraft chunk generation, portal travel, client packet rendering, or Paper's shutdown lifecycle. Before cutting a maintenance release, run a clean disposable Paper `26.3` server regression:
 
-1. complete the full regression;
-2. finalize README screenshots;
-3. verify README installation instructions;
-4. verify `plugin.yml`;
-5. verify default `config.yml`;
-6. remove temporary development-only logging;
-7. ensure test server data is not tracked;
-8. build the final JAR;
-9. inspect `build/libs/`;
-10. create a release tag.
+### 1. Clean Startup & Diagnostics
+- Start on a clean disposable server directory (both **with** and **without** PacketEvents `2.14.0`).
+- Confirm `ACTIVE` attempt `#1` and `STANDBY` attempt `#2` initialize cleanly, `.instigatehardcore-owner.properties` exists inside all 6 attempt dimension folders, and `/hc debug` reports `Integrity OK`.
+- Confirm `worlds.lobby-world` (`world`) remains separate and untouched.
 
-Suggested first stable version:
+### 2. Join, Reconnect & Phantom Insomnia
+- Join as a player; verify Survival placement in `ACTIVE`, scoreboard assignment, TAB hearts, participant count = `1 / 1`, and `TIME_SINCE_REST` reset to `0`.
+- Disconnect and reconnect; verify inventory/location persist and participant count stays `1 / 1`.
+- Verify `/hc help`, `/hc status`, `/hc stats`, `/hc deaths`, `/hc coords`, `/hc worlds`, `/hc debug`.
+- Verify `/hcreplaytest` is refused when `death-replay.debug-preview-enabled: false`.
 
-```text
-v1.0.0
-```
+### 3. Dimensions & Portal Isolation
+- Enter a Nether portal from `ACTIVE` Overworld → confirm arrival in `ACTIVE` Nether and return to `ACTIVE` Overworld.
+- Enter an End portal from `ACTIVE` Overworld → confirm arrival in `ACTIVE` End and exit back into `ACTIVE` Overworld.
 
-After the first public release, maintain a `CHANGELOG.md` for user-facing changes.
+### 4. Real Death, Deathcam & World Rotation
+- **With PacketEvents `2.14.0`:** Trigger a real death in `ACTIVE`. Verify vanilla death chat/drops suppressed, 7s Deathcam plays, 3s reset buffer runs, `STANDBY` promotes to `ACTIVE`, player state/advancements/insomnia reset, retired attempt unloads and deletes cleanly, and replacement `STANDBY` generates.
+- **Without PacketEvents:** Repeat a death and verify clean fallback to the standard 10s reset countdown and full world rotation.
 
-`ROADMAP.md` can then remain for future planning or be removed if it no longer adds value.
+### 5. Administrative Reset
+- Run `/hc reset` then `/hc reset confirm`. Verify the attempt rotates using the standard countdown without recording a player death, and confirm a stale confirmation cannot reset a newer attempt.
 
----
+### 6. Restart & Interrupted-Rotation Recovery
+- **Normal restart:** Stop cleanly with `/stop` and restart. Confirm attempt number, stats, participation, telemetry, and `ACTIVE`/`STANDBY` worlds recover with `/hc debug` → `Integrity OK`.
+- **Interrupted rotation:** Simulate or terminate during `phase=ROTATING` (`world-state.properties`) and restart. Confirm recovery promotes the persisted standby attempt, reconciles stats, generates a new standby, returns `phase=STABLE`, and preserves legacy ownership-marker provenance.
 
-# Common Development Rules
-
-Do not:
-
-- hot reload the plugin;
-- delete live player data files;
-- mutate attempt worlds outside world managers;
-- directly advance attempt state from unrelated classes;
-- use directory names as the only cleanup safety check;
-- bundle Paper into the plugin;
-- introduce player-facing colors outside `InstigateTheme`;
-- use a fixed player roster for participation.
-
-Do:
-
-- route lifecycle changes through managers;
-- keep persistence ownership clear;
-- validate attempt numbers;
-- prefer recoverable transitions;
-- run tests before builds;
-- manually test world changes on Paper;
-- keep player-facing messages concise.
+### 7. Protected-World Deletion Safeguards
+- Confirm retired attempt folders delete cleanly while `world/` (`lobby`), `world/dimensions/minecraft/*`, `ACTIVE`, `STANDBY`, `plugins/InstigateHardcore`, and any unmarked/unrelated directory under `world/dimensions/instigatehardcore/` remain completely untouched.
 
 ---
 
-# Final Verification Checklist
+## Development Rules
 
-```text
-[ ] ./gradlew clean test passes
-[ ] ./gradlew clean build passes
-[ ] plugin starts without errors
-[ ] ACTIVE and STANDBY are valid
-[ ] /hc debug reports Integrity OK
-[ ] scoreboard uses final theme
-[ ] countdown uses final theme
-[ ] death ends attempt exactly once
-[ ] admin reset adds no death
-[ ] new attempt says "Good luck."
-[ ] participation behaves correctly
-[ ] telemetry survives restart
-[ ] retired worlds clean up
-[ ] replacement standby generates
-[ ] crash recovery was tested after world-state changes
-[ ] README screenshots match current UI
-```
+- Never hot-reload (`/reload`) the plugin.
+- Never delete live player `.dat` files.
+- Never move Bukkit/Paper API calls onto asynchronous threads unless explicitly supported by Paper.
+- Never bypass `WorldDeletionGuard` or weaken ownership/symlink checks.
+- Log errors with `java.util.logging.Logger` (`Level.SEVERE` / `Level.WARNING`) rather than `printStackTrace()`.
+- Route player-facing styling through `InstigateTheme`.
 
 ---
 
-# Related Documentation
+## Related Documentation
 
-- [`../README.md`](../README.md) — installation and public overview
+- [`../README.md`](../README.md) — overview, installation, and upgrade steps
+- [`../SECURITY.md`](../SECURITY.md) — security policy and data-loss protections
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — system design and lifecycle
-- [`ROADMAP.md`](ROADMAP.md) — current development status
+- [`ROADMAP.md`](ROADMAP.md) — release history and maintenance policy
